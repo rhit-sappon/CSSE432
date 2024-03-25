@@ -12,24 +12,6 @@
 
 #define MAXDATASIZE 1024
 
-bool readLine(char** line, size_t* size, size_t* length){
-    while(1){
-        printf("String for the server> ");
-        size_t len = getline(line,size,stdin);
-        if(len == -1){
-            return false;
-        } /*end if end of file*/
-        if((*line)[len-1]=='\n'){
-            (*line)[--len] = '\0';
-        }/*end if last char is newline*/
-        *length = len;
-
-        if(len == 0)
-            continue;
-        
-        return len > 1 || **line != '.';
-    }
-}
 
 int main(int argc, char *argv[]){
     int sockfd, numbytes;
@@ -65,12 +47,13 @@ int main(int argc, char *argv[]){
         printf("Cli failed to connect");
         return 2;
     }
-    printf("Connection successful. enter ';;;' to exit\n");
+    printf("Connection with host %s successful on port %s. enter ';;;' to exit\n",argv[1], argv[2]);
     while(strcmp(buff,";;;")){
         printf(" -> ");
         memset(buff, 0, MAXDATASIZE);
         fgets(buff,MAXDATASIZE,stdin);
         buff[strlen(buff)-1] = '\0';
+        printf("Sending message to Server...\n");
         if(write(sockfd,buff,strlen(buff)) < 0){
             printf("Err writing\n");
         }
@@ -83,6 +66,6 @@ int main(int argc, char *argv[]){
         buff[ind] = '\0';
         printf("Received from Server: %s\n", buff);
     }
-    printf("Recieved exit code, closing connection\n");
+    printf("Recieved exit code \";;;\", closing connection\n");
     return 0;
 }
