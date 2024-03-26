@@ -48,8 +48,8 @@ void recieve_message(void * input){
     int message_number = ((struct threadargs*)input)->message_number;
     int sockfd = (int)((struct threadargs*)input)->socket;
     //int sockfd = (int) socket;
-    printf("Listening for Incoming Message\n");
     while(1){
+        printf("Listening for Incoming Message\n");
         memset(recieved_message, 0, BUFF_SIZE);
         if(read(sockfd, recieved_message, BUFF_SIZE) < 0){
             printf("Err read\n");
