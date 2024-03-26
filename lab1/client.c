@@ -13,6 +13,17 @@
 #define MAXDATASIZE 1024
 
 
+/*
+    Author: Owen Sapp
+    Purpose: Simple socket client that sends ascii and receives a message back from the server.
+    Date: 3/25/24
+
+    Attempted Incentive:
+        1. Writen in C
+
+*/
+
+
 int main(int argc, char *argv[]){
     int sockfd, numbytes;
     char buff[MAXDATASIZE];
