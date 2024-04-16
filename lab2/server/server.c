@@ -70,29 +70,36 @@ void * server_receive_thread(void * clinum){
             g_keepgoing = 0;
             printf("Client finished, now waiting to service another client...\n");
         }
-
-        if(strstr(buf, "iWant") != NULL){
+        if(strncmp(buf,"iWant",strlen("iWant")) == 0){
             //parse input for filename and check if valid
-            if(fileexists){
-                buf = "FileExists\0"
+            struct stat *sb;
+            if(stat(buf+6,sb)==0){
+                //printf("Desired File exists\n");
+
+            }
+            else {
+            //not an existing file
+                //printf("Desired filedoes not exist\n");
             }
             //wait for server to send confirmation that they are ready to receive
-            if(ready to receive){
+            if(strcmp(buf, "ready") == 0){
                 //set bool to send file true
+                printf("ready to send\n");
             }
         }
         
-        if(strstr(buf, "uTake") != NULL){
+        if(strncmp(buf,"uTake",strlen("uTake")) == 0){
             //ask where to send on client and get directory. 
             //create directory if it desnt exist
             //read file and save
+            printf("UTAK\n");
         }
-
-        if(other flags send like ready to recieve etc)
 
         else{
             //just aint right
-            buf = "That just aint right!\0"
+            printf("Unknown message from client\n");
+            strncpy(buf, "That just aint right!", sizeof(buf));
+            buf[sizeof(buf)-1]='\0';
         }
         
         for (int i = 0; i < received[client_num]; i++) {
