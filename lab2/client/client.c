@@ -59,9 +59,9 @@ void * client_send_thread(){
 
         written = getline(&buf, &len, stdin) - 1;
         buf[written] = '\0';
-        if(strcmp(buf, ";;;") == 0){
+        if(strcmp(buf, "exit") == 0){
             g_keepgoing = 0;
-            printf("User entered sentinel of \";;;\", now stopping client\n");
+            printf("See ya!\n");
         }
 
         if (send(server_socket, buf, written,0) < 0) {

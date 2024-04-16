@@ -66,9 +66,33 @@ void * server_receive_thread(void * clinum){
         
         printf("Data from client %d:\n     \"%s\"\n", client_num, buf);
 
-        if(strcmp(buf, ";;;") == 0){
+        if(strcmp(buf, "exit") == 0){
             g_keepgoing = 0;
             printf("Client finished, now waiting to service another client...\n");
+        }
+
+        if(strstr(buf, "iWant") != NULL){
+            //parse input for filename and check if valid
+            if(fileexists){
+                buf = "FileExists\0"
+            }
+            //wait for server to send confirmation that they are ready to receive
+            if(ready to receive){
+                //set bool to send file true
+            }
+        }
+        
+        if(strstr(buf, "uTake") != NULL){
+            //ask where to send on client and get directory. 
+            //create directory if it desnt exist
+            //read file and save
+        }
+
+        if(other flags send like ready to recieve etc)
+
+        else{
+            //just aint right
+            buf = "That just aint right!\0"
         }
         
         for (int i = 0; i < received[client_num]; i++) {
