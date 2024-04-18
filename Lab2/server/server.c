@@ -1,6 +1,6 @@
 /* File: server.c
- * Author: Bryce Bejlovec
- * Threaded server for a chat service that can host multiple users
+ * Authors: Bryce Bejlovec and Owen Sapp
+ * Threaded server for a chat service that can host multiple users with file transport capability
 */
 
 #include <stdio.h>
@@ -18,18 +18,19 @@
 #include <netdb.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 
 #define MESSAGE_LEN 1024
 #define MAX_CLIENTS 5
 #define RECV_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
 #define RECV_UH S_IRUSR | S_IWUSR
-#define SEND_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
 
 char* fileexisting = "A file with this name already exists.\nPlease rename and try again.\n";
-char* filer = "the big money boy in the sauce zone has been received on the big phone.";
+char* filenotfound= "File does not exist. Please try Again.\n";
 
 int g_keepgoing = 1;
+int pathlenmod = 0;
 int clients[MAX_CLIENTS] = {0};
 char freeclients[MAX_CLIENTS] = {0};
 char trans[MAX_CLIENTS] = {0};
@@ -75,10 +76,31 @@ void * server_receive_thread(void * clinum){
         }
         buf[received[client_num]] = '\0';
 
-        if(strncmp(buf,"uTake",5) == 0){
+        if(strncmp(buf,"uTake ",6) == 0){
+            pathlenmod = received[client_num] - 1;
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
+            while (buf[pathlenmod] != '/' && pathlenmod > 5) {
+                pathlenmod--;
+            } 
+            pathlenmod = pathlenmod - 5;
+            printf("%d\n",pathlenmod);
             strcpy(pathbuf, "./store");
-            strcat(pathbuf, buf + 6);
+            
+            if (pathlenmod > 0) {
+                strcat(pathbuf, buf + 6);
+                strcpy(buf, pathbuf);
+                buf[pathlenmod + 7] = 0;
+                printf("%s\n",buf);
+                struct stat pathstat;
+                if (stat(buf, &pathstat) == -1) {
+                    mkdir(buf, 0700);
+                    pathlenmod = 0;
+                }
+            } else {
+                strcat(pathbuf, "/default/");
+                strcat(pathbuf, buf + 6);
+            }
+            
 
             int file = open(pathbuf, RECV_F_FLAGS, RECV_UH);
             free(pathbuf);
@@ -103,7 +125,8 @@ void * server_receive_thread(void * clinum){
                 }
 
                 trans[client_num] = 1;
-
+                
+                memset(buf, 0, MESSAGE_LEN);
                 received[client_num] = read(clients[client_num], buf, MESSAGE_LEN);
                 if (received[client_num] <= 0) {
                     sendbool[client_num] = true;
@@ -112,8 +135,8 @@ void * server_receive_thread(void * clinum){
                     printf("Lost Connection from client %d\n",client_num);
                     break;
                 }
-
-                while (strncmp(buf, filer,strlen(filer)) != 0) {
+                
+                while (received[client_num] == MESSAGE_LEN) {
                     write(file, buf, received[client_num]);
                     memset(buf, 0, MESSAGE_LEN);
                     received[client_num] = read(clients[client_num], buf, MESSAGE_LEN);
@@ -126,12 +149,98 @@ void * server_receive_thread(void * clinum){
                         break;
                     }
                     printf("%d\n",received[client_num]);
+                    
                 }
+                printf("%d\n",received[client_num] - pathlenmod);
+                write(file, buf, received[client_num] - pathlenmod);
+                trans[client_num] = 0;
             }
             trans[client_num] = 0;
             close(file);
             pthread_mutex_unlock(buf_lock + client_num);
             continue;
+        }
+
+        if(strncmp(buf,"iWant ", 6) == 0) {
+            pathlenmod = received[client_num] - 1;
+            char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
+            while (buf[pathlenmod] != '/' && pathlenmod > 5) {
+                pathlenmod--;
+            } 
+            pathlenmod = pathlenmod - 5;
+            printf("%d\n",pathlenmod);
+            strcpy(pathbuf, "./store");
+            
+            if (pathlenmod > 0) {
+                strcat(pathbuf, buf + 6);
+                strcpy(buf, pathbuf);
+                buf[pathlenmod + 7] = 0;
+            } else {
+                strcat(pathbuf, "/default/");
+                strcat(pathbuf, buf + 6);
+            }
+            
+            
+            FILE* file = fopen(pathbuf, "rb");
+            
+            if (file == NULL) {
+                if (send(clients[client_num], filenotfound, strlen(filenotfound),0) < 0) {
+                    sendbool[client_num] = true;
+                    pthread_cond_broadcast(buf_cond + client_num);
+                    pthread_mutex_unlock(buf_lock + client_num);
+                    printf("Failed to send to client %d\n",client_num);
+                    break;
+                }
+                continue;
+            }
+            trans[client_num] = 1;
+
+            free(pathbuf);
+
+            if (send(clients[client_num], "R", 1,0) < 0) {
+                fclose(file);
+                trans[client_num] = 0;
+                sendbool[client_num] = true;
+                pthread_cond_broadcast(buf_cond + client_num);
+                pthread_mutex_unlock(buf_lock + client_num);
+                printf("Failed to send to client %d\n",client_num);
+                break;
+            }
+
+            memset(buf, 0, MESSAGE_LEN);
+
+            received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
+        
+            if (received[client_num] <= 0) {
+                fclose(file);
+                trans[client_num] = 0;
+                sendbool[client_num] = true;
+                pthread_cond_broadcast(buf_cond + client_num);
+                pthread_mutex_unlock(buf_lock + client_num);
+                printf("Lost Connection from client %d\n",client_num);
+                break;
+            }
+
+            if (strcmp(buf,"R") != 0) {
+                printf("Received from server: %s\n",buf);
+            } else {
+                long fileread = 0;
+                while (fileread = fread(buf, 1, MESSAGE_LEN, file)) {
+                    if (send(clients[client_num], buf, fileread,0) < 0) {
+                        fclose(file);
+                        pthread_cond_broadcast(buf_cond + client_num);
+                        pthread_mutex_unlock(buf_lock + client_num);
+                        printf("Failed to send to client %d\n",client_num);
+                        break;
+                    }
+                    memset(buf, 0, MESSAGE_LEN);
+                }
+
+                printf("File upload complete.\n");
+            }
+            fclose(file);
+            trans[client_num] = 0;
+
         }
         
         printf("Data from client %d:\n     \"%s\"\n", client_num, buf);
@@ -154,6 +263,7 @@ void * server_receive_thread(void * clinum){
     pthread_mutex_lock(&client_lock);
     close(clients[client_num]);
     freeclients[client_num] = 0;
+    trans[client_num] = 0;
     pthread_mutex_unlock(&client_lock);
     // Free client slot.
 

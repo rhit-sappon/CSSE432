@@ -1,6 +1,6 @@
 /* File: client.c
- * Author: Bryce Bejlovec
- * Threaded client for a chat service that can chat with multiple users.
+ * Authors: Bryce Bejlovec and Owen Sapp
+ * Threaded client for a chat service that can chat with multiple users with file transport capability.
 */
 
 #include <fcntl.h>
@@ -17,12 +17,16 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <netdb.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 
 #define MESSAGE_LEN 1024
 #define SEND_F_FLAGS O_RDONLY
+#define RECV_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
+#define RECV_UH S_IRUSR | S_IWUSR
 
-static char* filesent = "the big money boy in the sauce zone has been received on the big phone.";
 int g_keepgoing = 1;
 int server_socket, client_socket;
 pthread_t rthread,sthread;
@@ -38,6 +42,7 @@ void signal_handler(int sig){
 void * client_receive_thread(){
     char buf[MESSAGE_LEN] = {0};
     int received = 0;
+    printf("Started RECV thread\n");
     while (g_keepgoing) {
 
         received = read(server_socket, buf, MESSAGE_LEN - 1);
@@ -64,17 +69,14 @@ void * client_send_thread(){
 
         written = getline(&buf, &len, stdin) - 1;
         buf[written] = 0;
-        if(strncmp(buf,"uTake",5) == 0) {
-            printf("cum\n");
+        if(strncmp(buf,"uTake ",6) == 0) {
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
             strcpy(pathbuf,"./upload/");
             strcat(pathbuf, buf + 6);
-
-            printf("%s\n",pathbuf);
             
             
             FILE* file = fopen(pathbuf, "rb");
-            printf("on\n");
+
             if (file == NULL) {
                 printf("File does not exist. Please try Again.\n");
                 continue;
@@ -91,28 +93,23 @@ void * client_send_thread(){
             strcat(buf, pathbuf);
             buf[6+strlen(pathbuf)] = 0;
             free(pathbuf);
-            
-            printf("nuts\n");
 
             pthread_cancel(rthread);
-
-            printf("%s\n",buf);
 
             if (send(server_socket, buf, strlen(buf),0) < 0) {
                 printf("Failed to send to server\n");
                 break;
             } // Break if connection lost
             
-            printf("plz\n");
 
             int received = read(server_socket, buf, MESSAGE_LEN - 1);
 
-            printf("babe\n");
             if (received <= 0) {
                 printf("Lost Connection from server\n");
                 g_keepgoing = 0;
                 break;
             }
+
             buf[received] = 0;
 
             if (strcmp(buf,"R") != 0) {
@@ -126,14 +123,113 @@ void * client_send_thread(){
                     } // Break if connection lost
                     memset(buf, 0, MESSAGE_LEN);
                 }
-                if (send(server_socket, filesent, strlen(filesent),0) < 0) {
-                    printf("Failed to send to server\n");
-                    break;
-                } // Break if connection lost
+                // if (send(server_socket, filesent, strlen(filesent),0) < 0) {
+                //     printf("Failed to send to server\n");
+                //     break;
+                // } // Break if connection lost
                 printf("File upload complete.\n");
             }
             fclose(file);
 
+            int threadreturn = 0;
+            if (threadreturn = pthread_create(&rthread, NULL, client_receive_thread, NULL)) {
+                printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
+                perror("ERROR creating thread");
+                break;
+            }
+        }
+
+        if(strncmp(buf,"iWant ",6) == 0) {
+            char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
+            char (*filename) = malloc(sizeof(char[MESSAGE_LEN]));
+
+            strcpy(filename, buf + 6);
+
+            printf("What directory on the server would you like to download this file from?\n");
+            written = getline(&pathbuf, &len, stdin) - 1;
+            pathbuf[written] = '\0';
+            strcat(pathbuf, filename);
+
+            buf[6] = 0;
+            strcat(buf, pathbuf);
+            buf[6+strlen(pathbuf)] = 0;
+
+            pthread_cancel(rthread);
+
+            if (send(server_socket, buf, strlen(buf),0) < 0) {
+                printf("Failed to send to server\n");
+                break;
+            } // Break if connection lost
+            
+
+            int received = read(server_socket, buf, MESSAGE_LEN - 1);
+
+            if (received <= 0) {
+                printf("Lost Connection from server\n");
+                g_keepgoing = 0;
+                break;
+            }
+
+            buf[received] = 0;
+
+            if (strcmp(buf,"R") != 0) {
+                printf("Received from server: %s\n",buf);
+            } else {
+                memset(buf, 0, MESSAGE_LEN);
+                printf("File found! What directory would you like to save '%s' to? Leave blanks for default.\n", filename);
+reenterdir:
+                written = getline(&pathbuf, &len, stdin) - 1;
+                pathbuf[written] = '\0';
+
+                if (strlen(pathbuf) > 1) {
+                    struct stat pathstat;
+                    if (stat(pathbuf, &pathstat) == -1) {
+                        mkdir(pathbuf, 0700);
+                    }
+                    strcat(buf, pathbuf);
+                } else {
+                    strcpy(buf, "./received_files/");
+                }
+                strcat(buf, filename);
+                int file = open(buf, RECV_F_FLAGS, RECV_UH);
+                if (file < 0) {
+                    if (errno == EEXIST) {
+yesnoagain:
+                        printf("A file with the same name already exists in that directory! Overwrite? (Y/n)");
+                        written = getline(&buf, &len, stdin) - 1;
+                        if (buf[0] == 'Y'){
+                            strcpy(buf, pathbuf);
+                            strcat(buf, filename);
+                            file = open(buf, O_WRONLY);
+                        } else if (tolower(buf[0]) == 'n') {
+                            printf("Please enter new directory to save '%s' to.\n", filename);
+                            goto reenterdir;
+                        } else {
+                            goto yesnoagain;
+                        }
+                    }
+                }
+
+                if (send(server_socket, "R", 1,0) < 0) {
+                    printf("Failed to send to server\n");
+                    break;
+                } // Break if connection lost
+
+                memset(buf, 0, MESSAGE_LEN);
+
+                received = read(server_socket, buf, MESSAGE_LEN);
+                while (received == MESSAGE_LEN) {
+                    write(file, buf, received);
+                    memset(buf, 0, MESSAGE_LEN);
+                    received = read(server_socket, buf, MESSAGE_LEN);
+                }
+                write(file, buf, received);
+                printf("Download complete!");
+                free(pathbuf);
+                free(filename);
+            }
+            
+            continue;
             int threadreturn = 0;
             if (threadreturn = pthread_create(&rthread, NULL, client_receive_thread, NULL)) {
                 printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
