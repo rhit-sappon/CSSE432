@@ -3,6 +3,7 @@
  * Threaded client for a chat service that can chat with multiple users.
 */
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,9 +20,12 @@
 
 
 #define MESSAGE_LEN 1024
+#define SEND_F_FLAGS O_RDONLY
 
+static char* filesent = "the big money boy in the sauce zone has been received on the big phone.";
 int g_keepgoing = 1;
 int server_socket, client_socket;
+pthread_t rthread,sthread;
 
 char server_ip[INET6_ADDRSTRLEN];
 
@@ -35,6 +39,7 @@ void * client_receive_thread(){
     char buf[MESSAGE_LEN] = {0};
     int received = 0;
     while (g_keepgoing) {
+
         received = read(server_socket, buf, MESSAGE_LEN - 1);
         
         buf[received] = 0;
@@ -58,10 +63,88 @@ void * client_send_thread(){
     while (g_keepgoing) {
 
         written = getline(&buf, &len, stdin) - 1;
-        buf[written] = '\0';
-        if(strcmp(buf, "exit") == 0){
+        buf[written] = 0;
+        if(strncmp(buf,"uTake",5) == 0) {
+            printf("cum\n");
+            char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
+            strcpy(pathbuf,"./upload/");
+            strcat(pathbuf, buf + 6);
+
+            printf("%s\n",pathbuf);
+            
+            
+            FILE* file = fopen(pathbuf, "rb");
+            printf("on\n");
+            if (file == NULL) {
+                printf("File does not exist. Please try Again.\n");
+                continue;
+            }
+            strcpy(pathbuf, buf + 6);
+            printf("my\n");
+
+            printf("What directory on the server would you like to save this file to?\n");
+            written = getline(&pathbuf, &len, stdin) - 1;
+            pathbuf[written] = '\0';
+            strcat(pathbuf, buf + 6);
+
+            buf[6] = 0;
+            strcat(buf, pathbuf);
+            buf[6+strlen(pathbuf)] = 0;
+            free(pathbuf);
+            
+            printf("nuts\n");
+
+            pthread_cancel(rthread);
+
+            printf("%s\n",buf);
+
+            if (send(server_socket, buf, strlen(buf),0) < 0) {
+                printf("Failed to send to server\n");
+                break;
+            } // Break if connection lost
+            
+            printf("plz\n");
+
+            int received = read(server_socket, buf, MESSAGE_LEN - 1);
+
+            printf("babe\n");
+            if (received <= 0) {
+                printf("Lost Connection from server\n");
+                g_keepgoing = 0;
+                break;
+            }
+            buf[received] = 0;
+
+            if (strcmp(buf,"R") != 0) {
+                printf("Received from server: %s\n",buf);
+            } else {
+                long fileread = 0;
+                while (fileread = fread(buf, 1, MESSAGE_LEN, file)) {
+                    if (send(server_socket, buf, fileread,0) < 0) {
+                        printf("Failed to send to server\n");
+                        break;
+                    } // Break if connection lost
+                    memset(buf, 0, MESSAGE_LEN);
+                }
+                if (send(server_socket, filesent, strlen(filesent),0) < 0) {
+                    printf("Failed to send to server\n");
+                    break;
+                } // Break if connection lost
+                printf("File upload complete.\n");
+            }
+            fclose(file);
+
+            int threadreturn = 0;
+            if (threadreturn = pthread_create(&rthread, NULL, client_receive_thread, NULL)) {
+                printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
+                perror("ERROR creating thread");
+                break;
+            }
+        }
+
+        if(strcmp(buf, ";;;") == 0){
             g_keepgoing = 0;
-            printf("See ya!\n");
+            printf("User entered sentinel of \";;;\", now stopping client\n");
         }
 
         if (send(server_socket, buf, written,0) < 0) {
@@ -92,7 +175,6 @@ int main(int argc, char *argv[]) {
     char host_ip[100] = {0};
     int retval = 0;
     int threadreturn;
-    pthread_t rthread,sthread;
     int clientcount = 0;
 
     if (argc != 3) {

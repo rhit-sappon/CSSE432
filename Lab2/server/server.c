@@ -16,14 +16,23 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <netdb.h>
+#include <fcntl.h>
+#include <errno.h>
 
 
 #define MESSAGE_LEN 1024
 #define MAX_CLIENTS 5
+#define RECV_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
+#define RECV_UH S_IRUSR | S_IWUSR
+#define SEND_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
+
+char* fileexisting = "A file with this name already exists.\nPlease rename and try again.\n";
+char* filer = "the big money boy in the sauce zone has been received on the big phone.";
 
 int g_keepgoing = 1;
 int clients[MAX_CLIENTS] = {0};
 char freeclients[MAX_CLIENTS] = {0};
+char trans[MAX_CLIENTS] = {0};
 int received[MAX_CLIENTS] = {0};
 char (*client_bufs)[MAX_CLIENTS][MESSAGE_LEN] = NULL;
 int server_socket, client_socket;
@@ -58,48 +67,78 @@ void * server_receive_thread(void * clinum){
         received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
         
         if (received[client_num] <= 0) {
+            sendbool[client_num] = true;
+            pthread_cond_broadcast(buf_cond + client_num);
             pthread_mutex_unlock(buf_lock + client_num);
             printf("Lost Connection from client %d\n",client_num);
             break;
         }
         buf[received[client_num]] = '\0';
+
+        if(strncmp(buf,"uTake",5) == 0){
+            char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
+            strcpy(pathbuf, "./store");
+            strcat(pathbuf, buf + 6);
+
+            int file = open(pathbuf, RECV_F_FLAGS, RECV_UH);
+            free(pathbuf);
+            if (file < 0) {
+
+                if (errno == EEXIST) {
+                    if (send(clients[client_num], fileexisting, strlen(fileexisting),0) < 0) {
+                        sendbool[client_num] = true;
+                        pthread_cond_broadcast(buf_cond + client_num);
+                        pthread_mutex_unlock(buf_lock + client_num);
+                        printf("Failed to send to client %d\n",client_num);
+                        break;
+                    }
+                }
+            } else {
+                if (send(clients[client_num], "R", 1,0) < 0) {
+                    sendbool[client_num] = true;
+                    pthread_cond_broadcast(buf_cond + client_num);
+                    pthread_mutex_unlock(buf_lock + client_num);
+                    printf("Failed to send to client %d\n",client_num);
+                    break;
+                }
+
+                trans[client_num] = 1;
+
+                received[client_num] = read(clients[client_num], buf, MESSAGE_LEN);
+                if (received[client_num] <= 0) {
+                    sendbool[client_num] = true;
+                    pthread_cond_broadcast(buf_cond + client_num);
+                    pthread_mutex_unlock(buf_lock + client_num);
+                    printf("Lost Connection from client %d\n",client_num);
+                    break;
+                }
+
+                while (strncmp(buf, filer,strlen(filer)) != 0) {
+                    write(file, buf, received[client_num]);
+                    memset(buf, 0, MESSAGE_LEN);
+                    received[client_num] = read(clients[client_num], buf, MESSAGE_LEN);
+
+                    if (received[client_num] <= 0) {
+                        sendbool[client_num] = true;
+                        pthread_cond_broadcast(buf_cond + client_num);
+                        pthread_mutex_unlock(buf_lock + client_num);
+                        printf("Lost Connection from client %d\n",client_num);
+                        break;
+                    }
+                    printf("%d\n",received[client_num]);
+                }
+            }
+            trans[client_num] = 0;
+            close(file);
+            pthread_mutex_unlock(buf_lock + client_num);
+            continue;
+        }
         
         printf("Data from client %d:\n     \"%s\"\n", client_num, buf);
 
-        if(strcmp(buf, "exit") == 0){
+        if(strcmp(buf, ";;;") == 0){
             g_keepgoing = 0;
             printf("Client finished, now waiting to service another client...\n");
-        }
-        if(strncmp(buf,"iWant",strlen("iWant")) == 0){
-            //parse input for filename and check if valid
-            struct stat *sb;
-            if(stat(buf+6,sb)==0){
-                //printf("Desired File exists\n");
-
-            }
-            else {
-            //not an existing file
-                //printf("Desired filedoes not exist\n");
-            }
-            //wait for server to send confirmation that they are ready to receive
-            if(strcmp(buf, "ready") == 0){
-                //set bool to send file true
-                printf("ready to send\n");
-            }
-        }
-        
-        if(strncmp(buf,"uTake",strlen("uTake")) == 0){
-            //ask where to send on client and get directory. 
-            //create directory if it desnt exist
-            //read file and save
-            printf("UTAK\n");
-        }
-
-        else{
-            //just aint right
-            printf("Unknown message from client\n");
-            strncpy(buf, "That just aint right!", sizeof(buf));
-            buf[sizeof(buf)-1]='\0';
         }
         
         for (int i = 0; i < received[client_num]; i++) {
@@ -140,7 +179,7 @@ void * server_send_thread(void * clinum){
 
         pthread_mutex_lock(&client_lock);
         for (int i = 0; i < MAX_CLIENTS; i++){
-            if (freeclients[i]){
+            if (freeclients[i] && !trans[i]){
                 if (send(clients[i], buf, received[client_num],0) < 0) {
                     printf("Failed to send to client %d\n",i);
                     continue;

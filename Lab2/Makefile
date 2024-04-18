@@ -1,8 +1,8 @@
 # Bryce Bejlovec
 # To compile all three programs, list all executable names here.
 CC = gcc
-CFLAGS =
-all: client server
+CFLAGS = -pthread
+all: client/client server/server
 
 %: %.o
 	$(CC) $(CFLAGS) $< -o $@
@@ -14,5 +14,5 @@ all: client server
 # Be sure to delete the "palindrome" executable also.
 # Delete these files BEFORE committing your work. 
 clean:
-	rm -f *.o client server
+	rm -f *.o client/client server/server
 
