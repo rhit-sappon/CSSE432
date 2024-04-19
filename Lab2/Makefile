@@ -15,4 +15,3 @@ all: client/client server/server
 # Delete these files BEFORE committing your work. 
 clean:
 	rm -f *.o client/client server/server
-

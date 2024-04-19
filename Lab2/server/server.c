@@ -83,7 +83,7 @@ void * server_receive_thread(void * clinum){
                 pathlenmod--;
             } 
             pathlenmod = pathlenmod - 5;
-            printf("%d\n",pathlenmod);
+            //printf("%d\n",pathlenmod);
             strcpy(pathbuf, "./store");
             
             if (pathlenmod > 0) {
@@ -148,10 +148,10 @@ void * server_receive_thread(void * clinum){
                         printf("Lost Connection from client %d\n",client_num);
                         break;
                     }
-                    printf("%d\n",received[client_num]);
+                    //printf("%d\n",received[client_num]);
                     
                 }
-                printf("%d\n",received[client_num] - pathlenmod);
+                //printf("%d\n",received[client_num] - pathlenmod);
                 write(file, buf, received[client_num] - pathlenmod);
                 trans[client_num] = 0;
             }
@@ -240,6 +240,8 @@ void * server_receive_thread(void * clinum){
             }
             fclose(file);
             trans[client_num] = 0;
+            pthread_mutex_unlock(buf_lock + client_num);
+            continue;
 
         }
         

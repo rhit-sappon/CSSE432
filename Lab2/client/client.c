@@ -82,7 +82,6 @@ void * client_send_thread(){
                 continue;
             }
             strcpy(pathbuf, buf + 6);
-            printf("my\n");
 
             printf("What directory on the server would you like to save this file to?\n");
             written = getline(&pathbuf, &len, stdin) - 1;
@@ -153,17 +152,15 @@ void * client_send_thread(){
             buf[6] = 0;
             strcat(buf, pathbuf);
             buf[6+strlen(pathbuf)] = 0;
-
             pthread_cancel(rthread);
-
             if (send(server_socket, buf, strlen(buf),0) < 0) {
                 printf("Failed to send to server\n");
                 break;
             } // Break if connection lost
             
-
+            
             int received = read(server_socket, buf, MESSAGE_LEN - 1);
-
+            
             if (received <= 0) {
                 printf("Lost Connection from server\n");
                 g_keepgoing = 0;
@@ -174,20 +171,30 @@ void * client_send_thread(){
 
             if (strcmp(buf,"R") != 0) {
                 printf("Received from server: %s\n",buf);
+                continue;
             } else {
                 memset(buf, 0, MESSAGE_LEN);
                 printf("File found! What directory would you like to save '%s' to? Leave blanks for default.\n", filename);
 reenterdir:
                 written = getline(&pathbuf, &len, stdin) - 1;
                 pathbuf[written] = '\0';
-
+                printf("Path entered: %s\n",pathbuf);
                 if (strlen(pathbuf) > 1) {
+                    printf("sssss\n");
+                    if (strncmp(pathbuf,"./",2) != 0) {
+                        printf("Please use the syntax './<dir>'\n");
+                        goto reenterdir;
+                    }
+                    if (pathbuf[strlen(pathbuf)-1] != '/'){
+                        strcat(pathbuf, "/");
+                    }
                     struct stat pathstat;
                     if (stat(pathbuf, &pathstat) == -1) {
                         mkdir(pathbuf, 0700);
                     }
                     strcat(buf, pathbuf);
                 } else {
+                    printf("Saving to default received_files\n");
                     strcpy(buf, "./received_files/");
                 }
                 strcat(buf, filename);
@@ -224,7 +231,7 @@ yesnoagain:
                     received = read(server_socket, buf, MESSAGE_LEN);
                 }
                 write(file, buf, received);
-                printf("Download complete!");
+                printf("Download complete!\n");
                 free(pathbuf);
                 free(filename);
             }
