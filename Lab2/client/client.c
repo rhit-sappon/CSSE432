@@ -137,8 +137,7 @@ void * client_send_thread(){
                 break;
             }
         }
-
-        if(strncmp(buf,"iWant ",6) == 0) {
+        else if(strncmp(buf,"iWant ",6) == 0) {
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
             char (*filename) = malloc(sizeof(char[MESSAGE_LEN]));
 
@@ -175,7 +174,7 @@ void * client_send_thread(){
             } else {
                 memset(buf, 0, MESSAGE_LEN);
                 printf("File found! What directory would you like to save '%s' to? Leave blanks for default.\n", filename);
-reenterdir:
+            reenterdir:
                 written = getline(&pathbuf, &len, stdin) - 1;
                 pathbuf[written] = '\0';
                 printf("Path entered: %s\n",pathbuf);
@@ -201,7 +200,7 @@ reenterdir:
                 int file = open(buf, RECV_F_FLAGS, RECV_UH);
                 if (file < 0) {
                     if (errno == EEXIST) {
-yesnoagain:
+                        yesnoagain:
                         printf("A file with the same name already exists in that directory! Overwrite? (Y/n)");
                         written = getline(&buf, &len, stdin) - 1;
                         if (buf[0] == 'Y'){
@@ -244,10 +243,12 @@ yesnoagain:
                 break;
             }
         }
-
-        if(strcmp(buf, ";;;") == 0){
+        else if(strcmp(buf, ";;;") == 0){
             g_keepgoing = 0;
             printf("User entered sentinel of \";;;\", now stopping client\n");
+        }
+        else if(strcmp(buf,"\n") != 0){
+            printf("That just aint right!\n");
         }
 
         if (send(server_socket, buf, written,0) < 0) {
