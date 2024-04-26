@@ -69,7 +69,7 @@ void * client_send_thread(){
 
         written = getline(&buf, &len, stdin) - 1;
         buf[written] = 0;
-        if(strncmp(buf,"uTake ",6) == 0) {
+        if(strncmp(buf,"uTake ",6) == 0) { //if uTake
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
             strcpy(pathbuf,"./upload/");
             strcat(pathbuf, buf + 6);
@@ -77,13 +77,14 @@ void * client_send_thread(){
             
             FILE* file = fopen(pathbuf, "rb");
 
-            if (file == NULL) {
+            if (file == NULL) { //ensure that the file to send to server exists. File is assumed to be in 'uploads' folder.
                 printf("File does not exist. Please try Again.\n");
                 continue;
             }
             strcpy(pathbuf, buf + 6);
 
-            printf("What directory on the server would you like to save this file to?\n");
+            printf("What directory on the server would you like to save this file to?\n"); //Get server dest directory
+            //formatting
             written = getline(&pathbuf, &len, stdin) - 1;
             pathbuf[written] = '\0';
             strcat(pathbuf, buf + 6);
@@ -95,13 +96,13 @@ void * client_send_thread(){
 
             pthread_cancel(rthread);
 
-            if (send(server_socket, buf, strlen(buf),0) < 0) {
+            if (send(server_socket, buf, strlen(buf),0) < 0) { //send the server the command uTake with format 'uTake /<destdir>/<filename>'. 
                 printf("Failed to send to server\n");
                 break;
             } // Break if connection lost
             
 
-            int received = read(server_socket, buf, MESSAGE_LEN - 1);
+            int received = read(server_socket, buf, MESSAGE_LEN - 1); //listen to the server to see if it has the file
 
             if (received <= 0) {
                 printf("Lost Connection from server\n");
@@ -111,11 +112,11 @@ void * client_send_thread(){
 
             buf[received] = 0;
 
-            if (strcmp(buf,"R") != 0) {
+            if (strcmp(buf,"R") != 0) { //server does not have the file
                 printf("Received from server: %s\n",buf);
-            } else {
+            } else { //server has the file
                 long fileread = 0;
-                while (fileread = fread(buf, 1, MESSAGE_LEN, file)) {
+                while (fileread = fread(buf, 1, MESSAGE_LEN, file)) { //transmit file
                     if (send(server_socket, buf, fileread,0) < 0) {
                         printf("Failed to send to server\n");
                         break;
@@ -130,24 +131,25 @@ void * client_send_thread(){
             }
             fclose(file);
 
-            int threadreturn = 0;
+            int threadreturn = 0; //return to normal operation
             if (threadreturn = pthread_create(&rthread, NULL, client_receive_thread, NULL)) {
                 printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
                 perror("ERROR creating thread");
                 break;
             }
         }
-        else if(strncmp(buf,"iWant ",6) == 0) {
+        else if(strncmp(buf,"iWant ",6) == 0) { //if iwant (use as 'iWant <filename>)
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
             char (*filename) = malloc(sizeof(char[MESSAGE_LEN]));
 
             strcpy(filename, buf + 6);
 
+            //get directory of file on server, this is assumed known and from the base "store" folder.
             printf("What directory on the server would you like to download this file from?\n");
             written = getline(&pathbuf, &len, stdin) - 1;
             pathbuf[written] = '\0';
             strcat(pathbuf, filename);
-
+            
             buf[6] = 0;
             strcat(buf, pathbuf);
             buf[6+strlen(pathbuf)] = 0;
@@ -158,7 +160,7 @@ void * client_send_thread(){
             } // Break if connection lost
             
             
-            int received = read(server_socket, buf, MESSAGE_LEN - 1);
+            int received = read(server_socket, buf, MESSAGE_LEN - 1); //listen to server to ensure that they have the file
             
             if (received <= 0) {
                 printf("Lost Connection from server\n");
@@ -168,17 +170,17 @@ void * client_send_thread(){
 
             buf[received] = 0;
 
-            if (strcmp(buf,"R") != 0) {
+            if (strcmp(buf,"R") != 0) { //server does not have file
                 printf("Received from server: %s\n",buf);
                 continue;
-            } else {
+            } else { //server has file for us to take
                 memset(buf, 0, MESSAGE_LEN);
-                printf("File found! What directory would you like to save '%s' to? Leave blanks for default.\n", filename);
-            reenterdir:
+                printf("File found! What directory would you like to save '%s' to? Leave blanks for default.\n", filename); //ask for where to store the file
+reenterdir:
                 written = getline(&pathbuf, &len, stdin) - 1;
                 pathbuf[written] = '\0';
                 printf("Path entered: %s\n",pathbuf);
-                if (strlen(pathbuf) > 1) {
+                if (strlen(pathbuf) > 1) { //if the path has a non-blank entry ensure that formatting is correct
                     printf("sssss\n");
                     if (strncmp(pathbuf,"./",2) != 0) {
                         printf("Please use the syntax './<dir>'\n");
@@ -187,7 +189,7 @@ void * client_send_thread(){
                     if (pathbuf[strlen(pathbuf)-1] != '/'){
                         strcat(pathbuf, "/");
                     }
-                    struct stat pathstat;
+                    struct stat pathstat; //makedir if not an existing dir
                     if (stat(pathbuf, &pathstat) == -1) {
                         mkdir(pathbuf, 0700);
                     }
@@ -199,8 +201,8 @@ void * client_send_thread(){
                 strcat(buf, filename);
                 int file = open(buf, RECV_F_FLAGS, RECV_UH);
                 if (file < 0) {
-                    if (errno == EEXIST) {
-                        yesnoagain:
+                    if (errno == EEXIST) {  //if file already exists locally, ask to overwrite
+yesnoagain:             
                         printf("A file with the same name already exists in that directory! Overwrite? (Y/n)");
                         written = getline(&buf, &len, stdin) - 1;
                         if (buf[0] == 'Y'){
@@ -216,16 +218,16 @@ void * client_send_thread(){
                     }
                 }
 
-                if (send(server_socket, "R", 1,0) < 0) {
+                if (send(server_socket, "R", 1,0) < 0) { //send a ready to receive file to server
                     printf("Failed to send to server\n");
                     break;
                 } // Break if connection lost
 
                 memset(buf, 0, MESSAGE_LEN);
 
-                received = read(server_socket, buf, MESSAGE_LEN);
+                received = read(server_socket, buf, MESSAGE_LEN); //get file from server
                 while (received == MESSAGE_LEN) {
-                    write(file, buf, received);
+                    write(file, buf, received); //write to file
                     memset(buf, 0, MESSAGE_LEN);
                     received = read(server_socket, buf, MESSAGE_LEN);
                 }
@@ -243,11 +245,11 @@ void * client_send_thread(){
                 break;
             }
         }
-        else if(strcmp(buf, ";;;") == 0){
+        else if(strcmp(buf, ";;;") == 0){ //exit condition
             g_keepgoing = 0;
             printf("User entered sentinel of \";;;\", now stopping client\n");
         }
-        else if(strcmp(buf,"\n") != 0){
+        else if(strcmp(buf,"\n") != 0){ //if not a random enter, its an unknown command. random enters are discounted and do nothing. Unknown commands are also ignored with a warning message.
             printf("That just aint right!\n");
         }
 

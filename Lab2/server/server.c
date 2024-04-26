@@ -76,7 +76,8 @@ void * server_receive_thread(void * clinum){
         }
         buf[received[client_num]] = '\0';
 
-        if(strncmp(buf,"uTake ",6) == 0){
+        if(strncmp(buf,"uTake ",6) == 0){  //If uTake
+            //Creating desired formatting of location/pathing
             pathlenmod = received[client_num] - 1;
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
             while (buf[pathlenmod] != '/' && pathlenmod > 5) {
@@ -101,12 +102,13 @@ void * server_receive_thread(void * clinum){
                 strcat(pathbuf, buf + 6);
             }
             
-
+            
+            //Opening file with create flag will fail if exists
             int file = open(pathbuf, RECV_F_FLAGS, RECV_UH);
             free(pathbuf);
             if (file < 0) {
 
-                if (errno == EEXIST) {
+                if (errno == EEXIST) { //Notify client that file already exists on server
                     if (send(clients[client_num], fileexisting, strlen(fileexisting),0) < 0) {
                         sendbool[client_num] = true;
                         pthread_cond_broadcast(buf_cond + client_num);
@@ -115,7 +117,7 @@ void * server_receive_thread(void * clinum){
                         break;
                     }
                 }
-            } else {
+            } else { //File was created and we are ready to receive. Notify client we are ready.
                 if (send(clients[client_num], "R", 1,0) < 0) {
                     sendbool[client_num] = true;
                     pthread_cond_broadcast(buf_cond + client_num);
@@ -137,7 +139,7 @@ void * server_receive_thread(void * clinum){
                 }
                 
                 while (received[client_num] == MESSAGE_LEN) {
-                    write(file, buf, received[client_num]);
+                    write(file, buf, received[client_num]); //Write to file until we receive less than 1024 (ie end of file)
                     memset(buf, 0, MESSAGE_LEN);
                     received[client_num] = read(clients[client_num], buf, MESSAGE_LEN);
 
@@ -152,7 +154,7 @@ void * server_receive_thread(void * clinum){
                     
                 }
                 //printf("%d\n",received[client_num] - pathlenmod);
-                write(file, buf, received[client_num] - pathlenmod);
+                write(file, buf, received[client_num] - pathlenmod); //write remainder of the file
                 trans[client_num] = 0;
             }
             trans[client_num] = 0;
@@ -161,7 +163,8 @@ void * server_receive_thread(void * clinum){
             continue;
         }
 
-        if(strncmp(buf,"iWant ", 6) == 0) {
+        if(strncmp(buf,"iWant ", 6) == 0) { //if iWant
+            //String formatting for pathing
             pathlenmod = received[client_num] - 1;
             char (*pathbuf) = malloc(sizeof(char[MESSAGE_LEN]));
             while (buf[pathlenmod] != '/' && pathlenmod > 5) {
@@ -180,10 +183,10 @@ void * server_receive_thread(void * clinum){
                 strcat(pathbuf, buf + 6);
             }
             
-            
+            //ensure that file exists for client to take
             FILE* file = fopen(pathbuf, "rb");
             
-            if (file == NULL) {
+            if (file == NULL) { //if not a file, inform client
                 if (send(clients[client_num], filenotfound, strlen(filenotfound),0) < 0) {
                     sendbool[client_num] = true;
                     pthread_cond_broadcast(buf_cond + client_num);
@@ -197,7 +200,7 @@ void * server_receive_thread(void * clinum){
 
             free(pathbuf);
 
-            if (send(clients[client_num], "R", 1,0) < 0) {
+            if (send(clients[client_num], "R", 1,0) < 0) { //We have the file, tell client we have the file
                 fclose(file);
                 trans[client_num] = 0;
                 sendbool[client_num] = true;
@@ -211,7 +214,7 @@ void * server_receive_thread(void * clinum){
 
             received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
         
-            if (received[client_num] <= 0) {
+            if (received[client_num] <= 0) { // wait for client to say they are ready
                 fclose(file);
                 trans[client_num] = 0;
                 sendbool[client_num] = true;
@@ -221,12 +224,12 @@ void * server_receive_thread(void * clinum){
                 break;
             }
 
-            if (strcmp(buf,"R") != 0) {
+            if (strcmp(buf,"R") != 0) { //client is not ready but sent something else
                 printf("Received from server: %s\n",buf);
-            } else {
+            } else { //client is ready
                 long fileread = 0;
                 while (fileread = fread(buf, 1, MESSAGE_LEN, file)) {
-                    if (send(clients[client_num], buf, fileread,0) < 0) {
+                    if (send(clients[client_num], buf, fileread,0) < 0) { //send file
                         fclose(file);
                         pthread_cond_broadcast(buf_cond + client_num);
                         pthread_mutex_unlock(buf_lock + client_num);
@@ -238,7 +241,7 @@ void * server_receive_thread(void * clinum){
 
                 printf("File upload complete.\n");
             }
-            fclose(file);
+            fclose(file); //cleanup
             trans[client_num] = 0;
             pthread_mutex_unlock(buf_lock + client_num);
             continue;
@@ -247,7 +250,7 @@ void * server_receive_thread(void * clinum){
         
         printf("Data from client %d:\n     \"%s\"\n", client_num, buf);
 
-        if(strcmp(buf, ";;;") == 0){
+        if(strcmp(buf, ";;;") == 0){ //eit condition
             g_keepgoing = 0;
             printf("Client finished, now waiting to service another client...\n");
         }
