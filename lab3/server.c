@@ -1,142 +1,332 @@
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <string.h>
-#include <netdb.h>
-#include <sys/types.h>
-#include <ctype.h>
-#include <pthread.h>
-#include <signal.h>
-
-
-/*
-    Author: Owen Sapp
-    Purpose: Simple socket server that recieves ascii and sends back upper-case characters to the client.
-    Date: 3/25/24
-
-    Attempted Incentive:
-        1. Writen in C
-
-    Note on Incentive: 
-        While not written as a multi-user group chat, threaded functionality was added to allow for multiple
-        connections simultaneously. This may be worth partial incentive?
-
+/* File: server.c
+ * Author: Bryce Bejlovec
+ * Threaded server for a chat service that can host multiple users
 */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h> 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <pthread.h>
+//#include <stdbool.h>
+#include <netdb.h>
+#include "proxy_parse.h"
 
-#define DEFAULT_PORT 5500
-#define BUFF_SIZE 256
+typedef int bool;
+#define false 0
+#define true 1
+
+
+
+#define MESSAGE_LEN 1024
 #define MAX_CLIENTS 5
 
-struct sockaddr_in server_addr, client_addr;
-pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+int g_keepgoing = 1;
+int clients[MAX_CLIENTS] = {0};
+char freeclients[MAX_CLIENTS] = {0};
+int received[MAX_CLIENTS] = {0};
+char (*client_bufs)[MAX_CLIENTS][MESSAGE_LEN] = NULL;
+int server_socket, client_socket;
+bool sendbool[MAX_CLIENTS] = {false};
+pthread_mutex_t client_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t buf_lock[MAX_CLIENTS];
+pthread_cond_t buf_cond[MAX_CLIENTS];
+pthread_t rthreads[MAX_CLIENTS];
+pthread_t sthreads[MAX_CLIENTS];
 
-struct threadargs {
-    int thread_id;
-    void * socket;
-    int message_number;
-};
+char address[MESSAGE_LEN];
 
-char recieved_message[BUFF_SIZE];
-void recieve_message(void * input){
-    int client_number = ((struct threadargs*)input)->thread_id;
-    int message_number = ((struct threadargs*)input)->message_number;
-    int sockfd = (int)((struct threadargs*)input)->socket;
-    //int sockfd = (int) socket;
-    while(1){
-        printf("Listening for Incoming Message\n");
-        memset(recieved_message, 0, BUFF_SIZE);
-        if(read(sockfd, recieved_message, BUFF_SIZE) < 0){
-            printf("Err read\n");
+void signal_handler(int sig){
+	printf( "\nCtrl-C pressed, closing socket and exiting...\n" );
+	g_keepgoing = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (freeclients[i]){
+            close(clients[i]);
+            freeclients[i] = 0;
         }
-        printf("Recieved from client%d: Message %d \" %s \"\n",client_number,message_number,recieved_message);
-        int i = 0;
-        while(recieved_message[i]){
-            recieved_message[i] = toupper(recieved_message[i]);
-            i = i + 1;
-        }
-        printf("Sending back having changed string to upper case...\n\n");
-        if(write(sockfd, recieved_message, BUFF_SIZE) < 0){
-            printf("Err write\n");
-            break;
-        }
-        if(!strcmp(recieved_message, ";;;")){
-            printf("Exit code read, closing connection\n\n");
-            printf("****************************************************\n\n");
-            break;
-        }
-        message_number = message_number + 1;
-    }
-    close(sockfd);
+        pthread_cancel(rthreads[i]);
+        pthread_cancel(sthreads[i]);
+    } // Close all client sockets and kill threads
 
+    close(server_socket);
 }
 
+void * server_receive_thread(void * clinum){
+    int client_num = (int) clinum;
+    char* buf = (*client_bufs)[client_num];
+    while (g_keepgoing) {
 
-void server_program(int port){
-    //Create Socket
-    pthread_t server_thread;
-    int socket_fd = socket(AF_INET,SOCK_STREAM,0);
-    if(socket_fd < 0){ 
-        printf("err opening socket\n");
-        exit(0);
-    } /*end if socket error*/
-    memset(&server_addr, 0, sizeof(server_addr));
+        pthread_mutex_lock(buf_lock + client_num);
+        received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
+        
+        if (received[client_num] <= 0) {
+            pthread_mutex_unlock(buf_lock + client_num);
+            printf("Lost Connection from client %d\n",client_num);
+            break;
+        }
+        
+        struct ParsedRequest *req = ParsedRequest_create();
+        if (ParsedRequest_parse(req, buf, strlen(buf)) < 0) {
+            printf("parse failed\n");
+            return -1;
+        }
+        printf("Recieved from client:\n");
+        printf("Method:%s\n", req->method);
+        printf("Host:%s\n", req->host);
+        printf("Protocol:%s\n", req->protocol);
+        printf("Path:%s\n",req->path);
+        printf("Version:%s\n",req->version);
+        
+        //check if desired file exists
 
-    int opt = 1; 
-    setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+        //connect to website
+        char web_port[5] = "80";
+        if(!strcmp("http",req->protocol)){
+            strcpy(web_port,"80");
+        }
+        struct addrinfo website_hints,*website, *site;
+        int website_sockfd, rv;
+        memset(&website_hints, 0, sizeof(website_hints));
+        website_hints.ai_family = AF_UNSPEC;
+        website_hints.ai_socktype = SOCK_STREAM;
     
+        if((rv = getaddrinfo(req->host, web_port, &website_hints, &website)) != 0){
+            printf("getaddrinfo: %s \n", gai_strerror(rv));
+            return 1;
+        }
+        for(site = website; site!= NULL; site = site->ai_next){
+            if ((website_sockfd = socket(site->ai_family, site->ai_socktype, site->ai_protocol)) == -1){
+                perror("extern site socket");
+            }
+            if (connect(website_sockfd, site->ai_addr, site->ai_addrlen) == -1){
+                perror("extern site connect");
+            }
+            break;
+        }
+        if(site == NULL){
+            printf("failed to connect to external client\n");
+            return 2;
+        }
+        printf("Connection with host %s successful on port %s\n",req->host, web_port);
 
-    //Bind
-    if(bind(socket_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0){
-        printf("error binding socket\n");
+        //send website the get request (buf)
+        memset(buf,0,MESSAGE_LEN);
+        //printf("1BUF: %s\n",buf);
+        strcat(buf, "GET ");
+        //printf("2BUF: %s\n",buf);
+        strcat(buf, req->path);
+        //printf("3BUF: %s\n",buf);
+        strcat(buf, " ");
+        //printf("4BUF: %s\n",buf);
+        strcat(buf, req->version);
+        printf("Sending to external website %s\n",buf);
+        if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
+            printf("Failed to send GET Request to external website\n");
+            continue;
+        }
+
+        //receive back the get request
+        received[client_num] = read(website_sockfd,buf,MESSAGE_LEN);
+        if (received[client_num] <= 0) {
+            sendbool[client_num] = true;
+            pthread_cond_broadcast(buf_cond + client_num);
+            pthread_mutex_unlock(buf_lock + client_num);
+            printf("Lost Connection from client %d\n",client_num);
+            break;
+        }
+        printf("received from website: \n");
+        printf("%s\n",buf);
+        //save contents received to file (store on timelimit?)
+
+        //send get request back to client
+        if (send(clients[client_num], buf, sizeof(buf), 0) < 0){
+            printf("Failed to send GET response to client\n");
+            continue;
+        }
+
+        sendbool[client_num] = true;
+        
+        pthread_cond_broadcast(buf_cond + client_num);
+        pthread_mutex_unlock(buf_lock + client_num);
+    } // continue to receive client data and convert to uppercase
+    
+    pthread_mutex_lock(&client_lock);
+    close(clients[client_num]);
+    freeclients[client_num] = 0;
+    pthread_mutex_unlock(&client_lock);
+    // Free client slot.
+
+    pthread_cancel(rthreads[client_num]);
+}
+
+void * server_send_thread(void * clinum){
+    int client_num = (int) clinum;
+    char* buf = (*client_bufs)[client_num];
+    while (g_keepgoing && freeclients[client_num]) {
+        while(!sendbool[client_num]);
+        pthread_mutex_lock(buf_lock + client_num);
+
+        while (!sendbool[client_num]) {
+            pthread_cond_wait(buf_cond + client_num, buf_lock + client_num);
+        }
+
+        sendbool[client_num] = false;
+        if (!(freeclients[client_num] || g_keepgoing)) {
+            pthread_mutex_unlock(buf_lock + client_num);
+            break;
+        }
+
+        pthread_mutex_lock(&client_lock);
+        for (int i = 0; i < MAX_CLIENTS; i++){
+            if (freeclients[i]){
+                if (send(clients[i], buf, received[client_num],0) < 0) {
+                    printf("Failed to send to client %d\n",i);
+                    continue;
+                }
+            }
+        } // Send to all open client sockets
+        
+
+        pthread_mutex_unlock(&client_lock);
+        pthread_mutex_unlock(buf_lock + client_num);
+
+        
+    }
+    pthread_cancel(sthreads[client_num]);
+}
+
+void *get_in_addr(struct sockaddr *sa)
+{
+	if (sa->sa_family == AF_INET) {
+		return &(((struct sockaddr_in*)sa)->sin_addr);
+	}
+
+	return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+int main(int argc, char *argv[]) {
+    int client_len;
+    unsigned short port;
+    struct addrinfo server_address, *server_info;
+    struct sockaddr client_address;
+    char host_ip[100] = {0};
+    char client_ip[100] = {0};
+    int retval;
+    int threadreturn;
+
+    int clientcount = 0;
+    client_bufs = malloc(sizeof(char[MAX_CLIENTS][MESSAGE_LEN]));
+
+    if (argc != 2) {
+        printf("Usage: ./server <PORT>\n");
+        return 1;
+    }
+
+
+    // signal(SIGINT, signal_handler);
+
+    port = (unsigned short)atoi(argv[1]);
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        pthread_mutex_init(buf_lock + i, NULL);
+        pthread_cond_init(buf_cond + i,NULL);
+    } // initialize mutex and condition arrays for buffer modification between send and receive threads.
+
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.ai_family = AF_INET6;
+    server_address.ai_socktype = SOCK_STREAM;
+    server_address.ai_flags = AI_PASSIVE;
+    if ((retval = getaddrinfo(NULL, argv[1], &server_address, &server_info)) != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(retval));
+		return 1;
+	}
+
+    // server_socket = socket(server_info->ai_family, server_address.ai_socktype, server_address.ai_protocol);
+    
+    // if (server_socket < 0){
+    //     printf("Socket unable to be created!\n");
+    //     return 1;
+    // }
+
+    for (struct addrinfo* probe = server_info; probe != NULL; probe = probe->ai_next){
+        
+        server_socket = socket(server_info->ai_family, probe->ai_socktype, probe->ai_protocol);
+        
+        if (server_socket < 0){
+            printf("Socket unable to be created!\n");
+            return 1;
+        }
+        
+        if (retval = bind(server_socket, probe->ai_addr, probe->ai_addrlen) < 0) {
+            continue;
+        }
+        else{
+            inet_ntop(AF_INET6, &probe->ai_addr, host_ip, 100);
+            printf("Waiting for a connection on %s on port %s\n", host_ip, argv[1]);
+            break;
+        }
+    } // addrinfo list iterator
+    
+    if (retval < 0) {
+        printf("Cannot Bind! Error code: %d\n", retval);
+        perror("Error binding");
         exit(1);
     }
-
-    //Listen
-    listen(socket_fd,5);
-    printf("Server starting, listening on port %d\n",port);
-    int new_socket_fd;
-    int client_number = 0;
-    int cli_size = sizeof(client_addr);
-    char client_name[BUFF_SIZE];
-    while(new_socket_fd = accept(socket_fd, (struct sockaddr *) &client_addr, &cli_size)){
-        inet_ntop(AF_INET,&(client_addr.sin_addr), client_name, BUFF_SIZE);
-        printf("Connection made from: %s\n",client_name);
-        printf("****************************************************\n\n");
-        int retval;
-
-        struct threadargs *arguments = (struct threadargs *)malloc(sizeof(struct threadargs));
-        arguments->thread_id = client_number;
-        arguments->socket = (void *)new_socket_fd;
-        arguments->message_number = 0;
-
-        if(retval = pthread_create(&server_thread,NULL, recieve_message, (void *) arguments) < 0 ){
-            printf("error creating thread: %d\n",retval);
-            exit(1);
+    
+    
+    listen(server_socket,MAX_CLIENTS);
+    while (g_keepgoing && (client_socket = accept(server_socket, &client_address, &client_len))) {
+        int startnum = clientcount;
+        
+        pthread_mutex_lock(&client_lock);
+        while (freeclients[clientcount]) {
+            clientcount = (clientcount + 1) % MAX_CLIENTS;
+            if (startnum == clientcount) { 
+                printf("Max Clients Reached!\n");
+                break;
+            }
+        }// Handle in-use slot and attempt to find another
+        
+        if (freeclients[clientcount]) {
+            pthread_mutex_unlock(&client_lock);
+            continue;
         }
-        client_number = client_number + 1;
+        pthread_mutex_unlock(&client_lock);
+        
+        inet_ntop(client_address.sa_family, get_in_addr(&client_address), client_ip, 100); // Obtain client IP string
 
+        printf("Connection %d made from %s\n",clientcount, client_ip);
 
+        // acquire lock to modify client information arrays
+        pthread_mutex_lock(&client_lock);
+        clients[clientcount] = client_socket;
+        freeclients[clientcount] = 1;
+        pthread_mutex_unlock(&client_lock);
+        
+        if (threadreturn = pthread_create(rthreads + clientcount, NULL, server_receive_thread, (void *) clientcount)) {
+                printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
+                perror("ERROR creating thread");
+                exit(1);
+        } // Error if receive thread fails to instanciate
 
-    }/*end while constantly accepting new connections*/
+        if (threadreturn = pthread_create(sthreads + clientcount, NULL, server_send_thread, (void *) clientcount)) {
+                printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
+                perror("ERROR creating thread");
+                exit(1);
+        } // Error if send thread fails to instanciate  
+    } // Listen for new connections and establish threads to handle communication.
+        
+    close(server_socket);
 
-}
-
-
-int main(int argc, char *argv[]){
-    if(argc == 1){
-        server_program(DEFAULT_PORT);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        pthread_cancel(rthreads[i]);
+        pthread_cancel(sthreads[i]);
     }
-    else{
-        server_program(atoi(argv[1]));
-    }
-    return 0;
+    pthread_exit(0);
 }
