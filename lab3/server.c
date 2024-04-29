@@ -1,6 +1,6 @@
 /* File: server.c
- * Author: Bryce Bejlovec
- * Threaded server for a chat service that can host multiple users
+ * Author: Bryce Bejlovec and Owen Sapp
+ * Threaded http proxy server
 */
 
 #include <stdio.h>
@@ -14,7 +14,6 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <pthread.h>
-//#include <stdbool.h>
 #include <netdb.h>
 #include "proxy_parse.h"
 
@@ -118,20 +117,23 @@ void * server_receive_thread(void * clinum){
         //send website the get request (buf)
         memset(buf,0,MESSAGE_LEN);
         //printf("1BUF: %s\n",buf);
-        strcat(buf, "GET ");
+        strcpy(buf, "GET ");
         //printf("2BUF: %s\n",buf);
         strcat(buf, req->path);
         //printf("3BUF: %s\n",buf);
-        //strcat(buf, " ");
-        //printf("4BUF: %s\n",buf);
-        //strcat(buf, req->version);
+        strcat(buf," HTTP/1.0\n");
+        strcat(buf,"Host: ");
+        strcat(buf, req->host);
+        strcat(buf, "\nConnection: close\n");
+        strcat(buf,"\n\r\n\r\n");
         printf("Sending to external website %s\n",buf);
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
             continue;
         }
-
+        memset(buf, 0, MESSAGE_LEN);
         //receive back the get request
+        printf("Receiving\n");
         received[client_num] = read(website_sockfd,buf,MESSAGE_LEN);
         if (received[client_num] <= 0) {
             sendbool[client_num] = true;
@@ -142,6 +144,10 @@ void * server_receive_thread(void * clinum){
         }
         printf("received from website: \n");
         printf("%s\n",buf);
+
+        //close website
+
+
         //save contents received to file (store on timelimit?)
 
         //send get request back to client
@@ -229,7 +235,7 @@ int main(int argc, char *argv[]) {
     }
 
 
-    // signal(SIGINT, signal_handler);
+    signal(SIGINT, signal_handler);
 
     port = (unsigned short)atoi(argv[1]);
 
