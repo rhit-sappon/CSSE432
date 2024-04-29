@@ -122,9 +122,9 @@ void * server_receive_thread(void * clinum){
         //printf("2BUF: %s\n",buf);
         strcat(buf, req->path);
         //printf("3BUF: %s\n",buf);
-        strcat(buf, " ");
+        //strcat(buf, " ");
         //printf("4BUF: %s\n",buf);
-        strcat(buf, req->version);
+        //strcat(buf, req->version);
         printf("Sending to external website %s\n",buf);
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
