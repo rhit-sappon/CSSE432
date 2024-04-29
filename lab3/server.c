@@ -121,17 +121,22 @@ void * server_receive_thread(void * clinum){
         //printf("2BUF: %s\n",buf);
         strcat(buf, req->path);
         //printf("3BUF: %s\n",buf);
-        strcat(buf," HTTP/1.0\n");
+        strcat(buf,"; HTTP/1.0\n");
         strcat(buf,"Host: ");
         strcat(buf, req->host);
         strcat(buf, "\nConnection: close\n");
-        strcat(buf,"\n\r\n\r\n");
         printf("Sending to external website %s\n",buf);
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
             continue;
         }
         memset(buf, 0, MESSAGE_LEN);
+        strcat(buf,"\r\n\r\n");
+        printf("Sending confirmation");
+        if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
+            printf("Failed to send GET Request to external website\n");
+            continue;
+        }       
         //receive back the get request
         printf("Receiving\n");
         received[client_num] = read(website_sockfd,buf,MESSAGE_LEN);
