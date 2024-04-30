@@ -23,7 +23,7 @@ typedef int bool;
 
 
 
-#define MESSAGE_LEN 1024
+#define MESSAGE_LEN 10000
 #define MAX_CLIENTS 5
 
 int g_keepgoing = 1;
@@ -89,27 +89,29 @@ void * server_receive_thread(void * clinum){
         if(!strcmp("http",req->protocol)){
             strcpy(web_port,"80");
         }
-        struct addrinfo website_hints,*website, *site;
-        int website_sockfd, rv;
-        memset(&website_hints, 0, sizeof(website_hints));
-        website_hints.ai_family = AF_UNSPEC;
-        website_hints.ai_socktype = SOCK_STREAM;
-    
-        if((rv = getaddrinfo(req->host, web_port, &website_hints, &website)) != 0){
-            printf("getaddrinfo: %s \n", gai_strerror(rv));
+        
+        int website_sockfd;
+        struct addrinfo hints, *sites, *site;
+        memset (&hints, 0, sizeof(struct addrinfo));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_ADDRCONFIG;
+        int ret;
+        if((ret = getaddrinfo(req->host, web_port, &hints, &sites)) != 0){
+            printf("getaddrinfo: %s \n", gai_strerror(ret));
             return 1;
         }
-        for(site = website; site!= NULL; site = site->ai_next){
+        for (site = sites; site!= NULL; site = site->ai_next){
             if ((website_sockfd = socket(site->ai_family, site->ai_socktype, site->ai_protocol)) == -1){
-                perror("extern site socket");
+                perror("client: socket");
             }
             if (connect(website_sockfd, site->ai_addr, site->ai_addrlen) == -1){
-                perror("extern site connect");
+                perror("client connect");
             }
             break;
         }
         if(site == NULL){
-            printf("failed to connect to external client\n");
+            printf("Cli failed to connect");
             return 2;
         }
         printf("Connection with host %s successful on port %s\n",req->host, web_port);
@@ -121,24 +123,22 @@ void * server_receive_thread(void * clinum){
         //printf("2BUF: %s\n",buf);
         strcat(buf, req->path);
         //printf("3BUF: %s\n",buf);
-        strcat(buf,"; HTTP/1.0\n");
+        strcat(buf," HTTP/1.0\n");
         strcat(buf,"Host: ");
         strcat(buf, req->host);
         strcat(buf, "\nConnection: close\n");
-        printf("Sending to external website %s\n",buf);
+        printf("Sending to external website\n%s",buf);
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
             continue;
         }
         memset(buf, 0, MESSAGE_LEN);
         strcat(buf,"\r\n\r\n");
-        printf("Sending confirmation");
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
             continue;
         }       
         //receive back the get request
-        printf("Receiving\n");
         received[client_num] = read(website_sockfd,buf,MESSAGE_LEN);
         if (received[client_num] <= 0) {
             sendbool[client_num] = true;
@@ -147,15 +147,18 @@ void * server_receive_thread(void * clinum){
             printf("Lost Connection from client %d\n",client_num);
             break;
         }
-        printf("received from website: \n");
+        printf("\nreceived from website: \n");
         printf("%s\n",buf);
 
         //close website
-
-
+        printf("Closing website connection\n");
+        if (close(website_sockfd) < 0){
+            printf("Failed to close website socket\n");
+        }
         //save contents received to file (store on timelimit?)
 
         //send get request back to client
+        printf("Sending back to local browser\n");
         if (send(clients[client_num], buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET response to client\n");
             continue;
@@ -165,6 +168,7 @@ void * server_receive_thread(void * clinum){
         
         pthread_cond_broadcast(buf_cond + client_num);
         pthread_mutex_unlock(buf_lock + client_num);
+
     } // continue to receive client data and convert to uppercase
     
     pthread_mutex_lock(&client_lock);
@@ -326,11 +330,11 @@ int main(int argc, char *argv[]) {
                 exit(1);
         } // Error if receive thread fails to instanciate
 
-        if (threadreturn = pthread_create(sthreads + clientcount, NULL, server_send_thread, (void *) clientcount)) {
-                printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
-                perror("ERROR creating thread");
-                exit(1);
-        } // Error if send thread fails to instanciate  
+        //if (threadreturn = pthread_create(sthreads + clientcount, NULL, server_send_thread, (void *) clientcount)) {
+        //        printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
+        //        perror("ERROR creating thread");
+        //        exit(1);
+        //} // Error if send thread fails to instanciate  
     } // Listen for new connections and establish threads to handle communication.
         
     close(server_socket);
