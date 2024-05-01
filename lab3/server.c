@@ -15,7 +15,11 @@
 #include <ctype.h>
 #include <pthread.h>
 #include <netdb.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include "proxy_parse.h"
+
 
 typedef int bool;
 #define false 0
@@ -25,6 +29,9 @@ typedef int bool;
 
 #define MESSAGE_LEN 10000
 #define MAX_CLIENTS 5
+
+#define RECV_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
+#define RECV_UH S_IRUSR | S_IWUSR
 
 int g_keepgoing = 1;
 int clients[MAX_CLIENTS] = {0};
@@ -69,11 +76,11 @@ void * server_receive_thread(void * clinum){
             printf("Lost Connection from client %d\n",client_num);
             break;
         }
-        
+        //printf("%s\n",buf);
         struct ParsedRequest *req = ParsedRequest_create();
         if (ParsedRequest_parse(req, buf, strlen(buf)) < 0) {
             printf("parse failed\n");
-            return -1;
+            break;
         }
         printf("Recieved from client:\n");
         printf("Method:%s\n", req->method);
@@ -81,8 +88,24 @@ void * server_receive_thread(void * clinum){
         printf("Protocol:%s\n", req->protocol);
         printf("Path:%s\n",req->path);
         printf("Version:%s\n",req->version);
+        ParsedHeader_set(req, "Connection","close\n");
+        //ParsedHeader_remove(req, "Accept-Encoding");
+        char head[ParsedHeader_headersLen(req)];
+        ParsedRequest_unparse_headers(req, head,sizeof(head));
+        printf("Headers:\n%s\n",head);
+        
+
         
         //check if desired file exists
+        char pathbuf[100];
+        strcpy(pathbuf, "./repo/");
+        strcat(pathbuf, req->host);
+        int temp = strlen(pathbuf);
+        strcat(pathbuf, req->path);
+        pathbuf[temp] = '.';
+        pathbuf[strlen(pathbuf)-5] = 0;
+
+
 
         //connect to website
         char web_port[5] = "80";
@@ -99,7 +122,7 @@ void * server_receive_thread(void * clinum){
         int ret;
         if((ret = getaddrinfo(req->host, web_port, &hints, &sites)) != 0){
             printf("getaddrinfo: %s \n", gai_strerror(ret));
-            return 1;
+            break;
         }
         for (site = sites; site!= NULL; site = site->ai_next){
             if ((website_sockfd = socket(site->ai_family, site->ai_socktype, site->ai_protocol)) == -1){
@@ -112,7 +135,7 @@ void * server_receive_thread(void * clinum){
         }
         if(site == NULL){
             printf("Cli failed to connect");
-            return 2;
+            break;
         }
         printf("Connection with host %s successful on port %s\n",req->host, web_port);
 
@@ -123,17 +146,16 @@ void * server_receive_thread(void * clinum){
         //printf("2BUF: %s\n",buf);
         strcat(buf, req->path);
         //printf("3BUF: %s\n",buf);
-        strcat(buf," HTTP/1.0\n");
-        strcat(buf,"Host: ");
-        strcat(buf, req->host);
-        strcat(buf, "\nConnection: close\n");
-        printf("Sending to external website\n%s",buf);
-        if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
+        strcat(buf," HTTP/1.0\r\n");
+        strcat(buf,head);
+        
+        printf("---------------\nSending to external website\n%s",buf);
+        if (send(website_sockfd, buf, MESSAGE_LEN, 0) < 0){
             printf("Failed to send GET Request to external website\n");
             continue;
         }
         memset(buf, 0, MESSAGE_LEN);
-        strcat(buf,"\r\n\r\n");
+        strcat(buf,"\r\n");
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
             continue;
@@ -147,8 +169,8 @@ void * server_receive_thread(void * clinum){
             printf("Lost Connection from client %d\n",client_num);
             break;
         }
-        printf("\nreceived from website: \n");
-        printf("%s\n",buf);
+        printf("\nreceived from website\n");
+        //printf("%s\n",buf);
 
         //close website
         printf("Closing website connection\n");
@@ -157,22 +179,22 @@ void * server_receive_thread(void * clinum){
         }
         //save contents received to file (store on timelimit?)
 
+        
         //send get request back to client
         printf("Sending back to local browser\n");
-        if (send(clients[client_num], buf, sizeof(buf), 0) < 0){
+        if (send(clients[client_num], buf, MESSAGE_LEN, 0) < 0){
             printf("Failed to send GET response to client\n");
             continue;
         }
 
-        sendbool[client_num] = true;
-        
+        close(clients[client_num]);
         pthread_cond_broadcast(buf_cond + client_num);
         pthread_mutex_unlock(buf_lock + client_num);
 
     } // continue to receive client data and convert to uppercase
     
     pthread_mutex_lock(&client_lock);
-    close(clients[client_num]);
+    
     freeclients[client_num] = 0;
     pthread_mutex_unlock(&client_lock);
     // Free client slot.
