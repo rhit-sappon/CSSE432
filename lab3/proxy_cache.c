@@ -27,8 +27,8 @@ typedef int bool;
 
 
 
-#define MESSAGE_LEN 10000
-#define MAX_CLIENTS 5
+#define MESSAGE_LEN 1024
+#define MAX_CLIENTS 10
 
 #define RECV_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
 #define RECV_UH S_IRUSR | S_IWUSR
@@ -63,23 +63,40 @@ void signal_handler(int sig){
     close(server_socket);
 }
 
+char* replace_character(char* string, char find, char replace){
+    char* index = strchr(string, find);
+    while(index){
+        *index = '.';
+        index = strchr(string, find);
+    }
+    return string;
+}
+
 void * server_receive_thread(void * clinum){
     int client_num = (int) clinum;
     char* buf = (*client_bufs)[client_num];
     while (g_keepgoing) {
 
         pthread_mutex_lock(buf_lock + client_num);
-        received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
-        
-        if (received[client_num] <= 0) {
-            pthread_mutex_unlock(buf_lock + client_num);
-            printf("Lost Connection from client %d\n",client_num);
-            break;
+        char request[MESSAGE_LEN];
+        char lastfour[4];
+        while(strcmp(request+strlen(request)-4, "\r\n\r\n") != 0){
+            received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
+            if (received[client_num] <= 0) {
+                pthread_mutex_unlock(buf_lock + client_num);
+                printf("Lost Connection from client %d\n",client_num);
+                break;
+            }
+            strcat(request, buf);
+            memset(buf, 0, MESSAGE_LEN);
+            printf("%s",request+strlen(request)-4);
+            printf("STRCMP %d\n",strcmp(request+strlen(request)-4, "\r\n\r\n"));
         }
-        //printf("%s\n",buf);
+        strcpy(buf, request);
+        printf("%s\n",buf);
         struct ParsedRequest *req = ParsedRequest_create();
         if (ParsedRequest_parse(req, buf, strlen(buf)) < 0) {
-            printf("parse failed\n");
+            printf("parse failed, malformed request\n");
             break;
         }
         printf("Recieved from client:\n");
@@ -101,11 +118,42 @@ void * server_receive_thread(void * clinum){
         strcpy(pathbuf, "./repo/");
         strcat(pathbuf, req->host);
         int temp = strlen(pathbuf);
-        strcat(pathbuf, req->path);
+        char reqpath[100];
+        strcpy(reqpath, req->path);
+        replace_character(reqpath,'/','.');
+        strcat(pathbuf, reqpath);
         pathbuf[temp] = '.';
-        pathbuf[strlen(pathbuf)-5] = 0;
+        pathbuf[strlen(pathbuf)] = 0;
 
-
+        struct stat statbuf;
+        if(stat(pathbuf, &statbuf) == 0){
+            //printf("----File Exists\n");
+            //file exists
+            if(time(NULL) - (statbuf.st_mtime) < 60){
+                //recent enough, open and send
+                printf("----File Recent\n");
+                FILE* website_file = fopen(pathbuf,"rb");
+                long fileread = 0;
+                while (fileread = fread(buf, 1, MESSAGE_LEN, website_file)) {
+                    if (send(clients[client_num], buf, fileread,0) < 0) {
+                        fclose(website_file);
+                        pthread_cond_broadcast(buf_cond + client_num);
+                        pthread_mutex_unlock(buf_lock + client_num);
+                        printf("Failed to send to client %d\n",client_num);
+                        break;
+                    }
+                    memset(buf, 0, MESSAGE_LEN);
+                }
+                fclose(website_file);
+                continue;
+            }
+            else{printf("----file not recent\n");}
+        }
+        printf("----File DNE\n");
+        printf("%s\n",pathbuf);
+        //Else file exists or is too old, create file or delete what was there
+        FILE* website_file = fopen(pathbuf, "wb");
+        fclose(website_file);
 
         //connect to website
         char web_port[5] = "80";
@@ -152,42 +200,62 @@ void * server_receive_thread(void * clinum){
         printf("---------------\nSending to external website\n%s",buf);
         if (send(website_sockfd, buf, MESSAGE_LEN, 0) < 0){
             printf("Failed to send GET Request to external website\n");
-            continue;
+            break;
         }
         memset(buf, 0, MESSAGE_LEN);
         strcat(buf,"\r\n");
         if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
             printf("Failed to send GET Request to external website\n");
-            continue;
+            break;
         }       
         //receive back the get request
-        received[client_num] = read(website_sockfd,buf,MESSAGE_LEN);
-        if (received[client_num] <= 0) {
+        
+        while((received[client_num] = read(website_sockfd, buf, MESSAGE_LEN)) == 1024){
+            printf("Received back\n");
+            if (received[client_num] <= 0) {
+                sendbool[client_num] = true;
+                pthread_cond_broadcast(buf_cond + client_num);
+                pthread_mutex_unlock(buf_lock + client_num);
+                printf("Lost Connection from client %d\n",client_num);
+                break;
+            }
+            printf("saving to file\n");   
+            //save contents received to file 
+            FILE* website_file = fopen(pathbuf, "ab");
+            fwrite(buf, 1, MESSAGE_LEN, website_file);
+            fclose(website_file);
+            printf("sending to client\n");  
+            //send get request back to client
+            printf("Sending back to local browser\n");
+            if (send(clients[client_num], buf, MESSAGE_LEN, 0) < 0){
+                printf("Failed to send GET response to client\n");
+                break;
+            }
+            memset(buf, 0, MESSAGE_LEN);
+        }
+        //Send remainder
+        website_file = fopen(pathbuf, "ab");
+        fwrite(buf, 1, received[client_num], website_file);
+        fclose(website_file);
+        if (send(clients[client_num], buf, MESSAGE_LEN, 0) < 0){
+            printf("Failed to send GET response to client\n");
+            break;
+        }
+        //err check
+        if (received[client_num] <= 0) { 
             sendbool[client_num] = true;
             pthread_cond_broadcast(buf_cond + client_num);
             pthread_mutex_unlock(buf_lock + client_num);
             printf("Lost Connection from client %d\n",client_num);
             break;
         }
-        printf("\nreceived from website\n");
-        //printf("%s\n",buf);
-
         //close website
         printf("Closing website connection\n");
         if (close(website_sockfd) < 0){
             printf("Failed to close website socket\n");
         }
-        //save contents received to file (store on timelimit?)
 
-        
-        //send get request back to client
-        printf("Sending back to local browser\n");
-        if (send(clients[client_num], buf, MESSAGE_LEN, 0) < 0){
-            printf("Failed to send GET response to client\n");
-            continue;
-        }
-
-        close(clients[client_num]);
+        //close(clients[client_num]);
         pthread_cond_broadcast(buf_cond + client_num);
         pthread_mutex_unlock(buf_lock + client_num);
 
@@ -202,41 +270,7 @@ void * server_receive_thread(void * clinum){
     pthread_cancel(rthreads[client_num]);
 }
 
-void * server_send_thread(void * clinum){
-    int client_num = (int) clinum;
-    char* buf = (*client_bufs)[client_num];
-    while (g_keepgoing && freeclients[client_num]) {
-        while(!sendbool[client_num]);
-        pthread_mutex_lock(buf_lock + client_num);
 
-        while (!sendbool[client_num]) {
-            pthread_cond_wait(buf_cond + client_num, buf_lock + client_num);
-        }
-
-        sendbool[client_num] = false;
-        if (!(freeclients[client_num] || g_keepgoing)) {
-            pthread_mutex_unlock(buf_lock + client_num);
-            break;
-        }
-
-        pthread_mutex_lock(&client_lock);
-        for (int i = 0; i < MAX_CLIENTS; i++){
-            if (freeclients[i]){
-                if (send(clients[i], buf, received[client_num],0) < 0) {
-                    printf("Failed to send to client %d\n",i);
-                    continue;
-                }
-            }
-        } // Send to all open client sockets
-        
-
-        pthread_mutex_unlock(&client_lock);
-        pthread_mutex_unlock(buf_lock + client_num);
-
-        
-    }
-    pthread_cancel(sthreads[client_num]);
-}
 
 void *get_in_addr(struct sockaddr *sa)
 {
@@ -352,11 +386,7 @@ int main(int argc, char *argv[]) {
                 exit(1);
         } // Error if receive thread fails to instanciate
 
-        //if (threadreturn = pthread_create(sthreads + clientcount, NULL, server_send_thread, (void *) clientcount)) {
-        //        printf("ERROR: Return Code from pthread_create() is %d\n", threadreturn);
-        //        perror("ERROR creating thread");
-        //        exit(1);
-        //} // Error if send thread fails to instanciate  
+
     } // Listen for new connections and establish threads to handle communication.
         
     close(server_socket);
