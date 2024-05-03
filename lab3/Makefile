@@ -4,7 +4,7 @@ CC = gcc
 CFLAGS = -pthread
 OBJECTS = proxy.o proxy_parse.o
 
-all: proxy proxy_cache
+all: proxy proxy_cache proxy_temp
 
 proxy: $(OBJECTS)
 	$(CC) $(CFLAGS) $(OBJECTS) -o proxy
@@ -20,6 +20,13 @@ proxy_cache: proxy_cache.o proxy_parse.o
 
 proxy_cache.o: proxy_cache.c
 	$(CC) $(CFLAGS) -c proxy_cache.c
+
+proxy_temp: proxy_temp.o proxy_parse.o
+	$(CC) $(CFLAGS) proxy_temp.o proxy_parse.o -o proxy_temp
+
+proxy_temp.o: proxy_temp.c
+	$(CC) $(CFLAGS) -c proxy_temp.c
+
 
 
 

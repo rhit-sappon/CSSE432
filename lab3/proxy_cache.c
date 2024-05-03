@@ -212,7 +212,7 @@ void * server_receive_thread(void * clinum){
         
         while((received[client_num] = read(website_sockfd, buf, MESSAGE_LEN)) == 1024){
             printf("Received back\n");
-            if (received[client_num] <= 0) {
+            if (received[client_num] < 0) {
                 sendbool[client_num] = true;
                 pthread_cond_broadcast(buf_cond + client_num);
                 pthread_mutex_unlock(buf_lock + client_num);
@@ -255,7 +255,7 @@ void * server_receive_thread(void * clinum){
             printf("Failed to close website socket\n");
         }
 
-        //close(clients[client_num]);
+        close(clients[client_num]);
         pthread_cond_broadcast(buf_cond + client_num);
         pthread_mutex_unlock(buf_lock + client_num);
 
