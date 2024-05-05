@@ -28,7 +28,7 @@ typedef int bool;
 
 
 #define MESSAGE_LEN 1024
-#define MAX_CLIENTS 10
+#define MAX_CLIENTS 20
 
 #define RECV_F_FLAGS O_CREAT | O_WRONLY | O_EXCL
 #define RECV_UH S_IRUSR | S_IWUSR
@@ -55,19 +55,25 @@ void signal_handler(int sig){
         if (freeclients[i]){
             close(clients[i]);
             freeclients[i] = 0;
+            pthread_cancel(rthreads[i]);
+            pthread_cancel(sthreads[i]);
         }
-        pthread_cancel(rthreads[i]);
-        pthread_cancel(sthreads[i]);
     } // Close all client sockets and kill threads
 
     close(server_socket);
 }
 
-char* replace_character(char* string, char find, char replace){
-    char* index = strchr(string, find);
+void end_thread(int client_num){ //Close the current thread
+    close(clients[client_num]);
+    freeclients[client_num] = 0;
+    pthread_cancel(rthreads[client_num]);
+}
+
+char* replace_character(char* string, char to_be_replaced, char replacer){
+    char *index = strchr(string, to_be_replaced);
     while(index){
-        *index = '.';
-        index = strchr(string, find);
+        *index = replacer;
+        index = strchr(string, to_be_replaced);
     }
     return string;
 }
@@ -75,201 +81,163 @@ char* replace_character(char* string, char find, char replace){
 void * server_receive_thread(void * clinum){
     int client_num = (int) clinum;
     char* buf = (*client_bufs)[client_num];
-    while (g_keepgoing) {
-
-        pthread_mutex_lock(buf_lock + client_num);
-        char request[MESSAGE_LEN];
-        char lastfour[4];
-        while(strcmp(request+strlen(request)-4, "\r\n\r\n") != 0){
-            received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
-            if (received[client_num] <= 0) {
-                pthread_mutex_unlock(buf_lock + client_num);
-                printf("Lost Connection from client %d\n",client_num);
-                break;
-            }
-            strcat(request, buf);
-            memset(buf, 0, MESSAGE_LEN);
-            printf("%s",request+strlen(request)-4);
-            printf("STRCMP %d\n",strcmp(request+strlen(request)-4, "\r\n\r\n"));
+    char request[MESSAGE_LEN];  
+    char lastfour[4];
+parser:
+    memset(buf, 0, MESSAGE_LEN);
+    memset(request, 0, MESSAGE_LEN);
+    while(strcmp(request+strlen(request)-4, "\r\n\r\n") != 0){ //keep parsing input until it reaches /r/n/r/n
+        received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
+        if (received[client_num] <= 0) {
+            pthread_mutex_unlock(buf_lock + client_num);
+            printf("Lost Connection from client %d\n",client_num);
+            end_thread(client_num);
         }
-        strcpy(buf, request);
-        printf("%s\n",buf);
-        struct ParsedRequest *req = ParsedRequest_create();
-        if (ParsedRequest_parse(req, buf, strlen(buf)) < 0) {
-            printf("parse failed, malformed request\n");
-            break;
-        }
-        printf("Recieved from client:\n");
-        printf("Method:%s\n", req->method);
-        printf("Host:%s\n", req->host);
-        printf("Protocol:%s\n", req->protocol);
-        printf("Path:%s\n",req->path);
-        printf("Version:%s\n",req->version);
-        ParsedHeader_set(req, "Connection","close\n");
-        //ParsedHeader_remove(req, "Accept-Encoding");
-        char head[ParsedHeader_headersLen(req)];
-        ParsedRequest_unparse_headers(req, head,sizeof(head));
-        printf("Headers:\n%s\n",head);
-        
-
-        
-        //check if desired file exists
-        char pathbuf[100];
-        strcpy(pathbuf, "./repo/");
-        strcat(pathbuf, req->host);
-        int temp = strlen(pathbuf);
-        char reqpath[100];
-        strcpy(reqpath, req->path);
-        replace_character(reqpath,'/','.');
-        strcat(pathbuf, reqpath);
-        pathbuf[temp] = '.';
-        pathbuf[strlen(pathbuf)] = 0;
-
-        struct stat statbuf;
-        if(stat(pathbuf, &statbuf) == 0){
-            //printf("----File Exists\n");
-            //file exists
-            if(time(NULL) - (statbuf.st_mtime) < 60){
-                //recent enough, open and send
-                printf("----File Recent\n");
-                FILE* website_file = fopen(pathbuf,"rb");
-                long fileread = 0;
-                while (fileread = fread(buf, 1, MESSAGE_LEN, website_file)) {
-                    if (send(clients[client_num], buf, fileread,0) < 0) {
-                        fclose(website_file);
-                        pthread_cond_broadcast(buf_cond + client_num);
-                        pthread_mutex_unlock(buf_lock + client_num);
-                        printf("Failed to send to client %d\n",client_num);
-                        break;
-                    }
-                    memset(buf, 0, MESSAGE_LEN);
-                }
-                fclose(website_file);
-                continue;
-            }
-            else{printf("----file not recent\n");}
-        }
-        printf("----File DNE\n");
-        printf("%s\n",pathbuf);
-        //Else file exists or is too old, create file or delete what was there
-        FILE* website_file = fopen(pathbuf, "wb");
-        fclose(website_file);
-
-        //connect to website
-        char web_port[5] = "80";
-        if(!strcmp("http",req->protocol)){
-            strcpy(web_port,"80");
-        }
-        
-        int website_sockfd;
-        struct addrinfo hints, *sites, *site;
-        memset (&hints, 0, sizeof(struct addrinfo));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_flags = AI_ADDRCONFIG;
-        int ret;
-        if((ret = getaddrinfo(req->host, web_port, &hints, &sites)) != 0){
-            printf("getaddrinfo: %s \n", gai_strerror(ret));
-            break;
-        }
-        for (site = sites; site!= NULL; site = site->ai_next){
-            if ((website_sockfd = socket(site->ai_family, site->ai_socktype, site->ai_protocol)) == -1){
-                perror("client: socket");
-            }
-            if (connect(website_sockfd, site->ai_addr, site->ai_addrlen) == -1){
-                perror("client connect");
-            }
-            break;
-        }
-        if(site == NULL){
-            printf("Cli failed to connect");
-            break;
-        }
-        printf("Connection with host %s successful on port %s\n",req->host, web_port);
-
-        //send website the get request (buf)
-        memset(buf,0,MESSAGE_LEN);
-        //printf("1BUF: %s\n",buf);
-        strcpy(buf, "GET ");
-        //printf("2BUF: %s\n",buf);
-        strcat(buf, req->path);
-        //printf("3BUF: %s\n",buf);
-        strcat(buf," HTTP/1.0\r\n");
-        strcat(buf,head);
-        
-        printf("---------------\nSending to external website\n%s",buf);
-        if (send(website_sockfd, buf, MESSAGE_LEN, 0) < 0){
-            printf("Failed to send GET Request to external website\n");
-            break;
-        }
+        strcat(request, buf);
         memset(buf, 0, MESSAGE_LEN);
-        strcat(buf,"\r\n");
-        if (send(website_sockfd, buf, sizeof(buf), 0) < 0){
-            printf("Failed to send GET Request to external website\n");
-            break;
-        }       
-        //receive back the get request
-        
-        while((received[client_num] = read(website_sockfd, buf, MESSAGE_LEN)) == 1024){
-            printf("Received back\n");
-            if (received[client_num] < 0) {
-                sendbool[client_num] = true;
-                pthread_cond_broadcast(buf_cond + client_num);
-                pthread_mutex_unlock(buf_lock + client_num);
-                printf("Lost Connection from client %d\n",client_num);
-                break;
+        //printf("%s",request+strlen(request)-4);
+        //printf("STRCMP %d\n",strcmp(request+strlen(request)-4, "\r\n\r\n"));
+    }
+    strcpy(buf, request);
+    memset(request, 0, MESSAGE_LEN);
+    //printf("%s\n",buf);
+    //parse request
+    struct ParsedRequest *req = ParsedRequest_create();
+    if (ParsedRequest_parse(req, buf, strlen(buf)) < 0) {
+        printf("parse failed please try again\n");
+        goto parser; //recolect input if parsing errored
+    }
+    printf("Recieved from client %d:\n", client_num);
+    printf("Method:%s\n", req->method);
+    printf("Host:%s\n", req->host);
+    printf("Protocol:%s\n", req->protocol);
+    printf("Path:%s\n",req->path);
+    printf("Version:%s\n",req->version);
+    ParsedHeader_set(req, "Connection","close\n");
+    ParsedHeader_remove(req, "Accept-Encoding");
+    char head[ParsedHeader_headersLen(req)];
+    ParsedRequest_unparse_headers(req, head,sizeof(head));
+    printf("Headers:\n%s\n",head);
+
+    //check if desired file exists
+    char pathbuf[100];
+    strcpy(pathbuf, "./repo/");
+    strcat(pathbuf, req->host);
+    int temp = strlen(pathbuf);
+    char reqpath[100];
+    strcpy(reqpath, req->path);
+    replace_character(reqpath,'/','.');
+    strcat(pathbuf, reqpath);
+    pathbuf[temp] = '.';
+    pathbuf[strlen(pathbuf)] = 0;
+
+    struct stat statbuf;
+    FILE* website_file;
+    if(stat(pathbuf, &statbuf) == 0){
+        //printf("----File Exists\n");
+        //file exists
+        if(time(NULL) - (statbuf.st_mtime) < 60){
+            //recent enough, open and send
+            printf("----File Recent\n");
+            website_file = fopen(pathbuf,"rb");
+            long fileread = 0;
+            while (fileread = fread(buf, 1, MESSAGE_LEN, website_file)) {
+                if (send(clients[client_num], buf, fileread,MSG_NOSIGNAL) < 0) {
+                    fclose(website_file);
+                    pthread_cond_broadcast(buf_cond + client_num);
+                    pthread_mutex_unlock(buf_lock + client_num);
+                    printf("Failed to send to client %d\n",client_num);
+                    break;
+                }
+                memset(buf, 0, MESSAGE_LEN);
             }
-            printf("saving to file\n");   
-            //save contents received to file 
-            FILE* website_file = fopen(pathbuf, "ab");
-            fwrite(buf, 1, MESSAGE_LEN, website_file);
             fclose(website_file);
-            printf("sending to client\n");  
-            //send get request back to client
-            printf("Sending back to local browser\n");
-            if (send(clients[client_num], buf, MESSAGE_LEN, 0) < 0){
-                printf("Failed to send GET response to client\n");
-                break;
-            }
-            memset(buf, 0, MESSAGE_LEN);
         }
-        //Send remainder
-        website_file = fopen(pathbuf, "ab");
-        fwrite(buf, 1, received[client_num], website_file);
-        fclose(website_file);
-        if (send(clients[client_num], buf, MESSAGE_LEN, 0) < 0){
-            printf("Failed to send GET response to client\n");
-            break;
+        else{printf("----file not recent\n");}
+    }
+    else{printf("----File DNE\n");}
+    printf("%s\n",pathbuf);
+    //Else file exists or is too old, create file or delete what was there
+    website_file = fopen(pathbuf, "wb");
+    fclose(website_file);
+
+    //connect to website
+    char web_port[5] = "80";
+    if(!strcmp("http",req->protocol)){
+        strcpy(web_port,"80");
+    }
+    int website_sockfd;
+    struct addrinfo hints, *sites, *site;
+    memset (&hints, 0, sizeof(struct addrinfo));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_ADDRCONFIG;
+    int ret;
+    if((ret = getaddrinfo(req->host, web_port, &hints, &sites)) != 0){
+        printf("getaddrinfo: %s \n", gai_strerror(ret));
+        end_thread(client_num);
+    }
+    for (site = sites; site!= NULL; site = site->ai_next){
+        if ((website_sockfd = socket(site->ai_family, site->ai_socktype, site->ai_protocol)) == -1){
+            perror("client: socket");
         }
-        //err check
-        if (received[client_num] <= 0) { 
-            sendbool[client_num] = true;
+        if (connect(website_sockfd, site->ai_addr, site->ai_addrlen) == -1){
+            perror("client connect");
+        }
+        break;
+    }
+    if(site == NULL){
+        printf("Cli failed to connect");
+        close(website_sockfd);
+        end_thread(client_num);
+    }
+    printf("Connection with host %s successful on port %s\n",req->host, web_port);
+
+    //send website the get request (buf)
+    memset(buf,0,MESSAGE_LEN);
+    strcpy(buf, "GET ");
+    strcat(buf, req->path);
+    strcat(buf," HTTP/1.0\r\n");
+    strcat(buf,head);
+    strcat(buf, "\r\n");
+        
+    printf("Sending to external website\n");
+    if (send(website_sockfd, buf, MESSAGE_LEN, 0) < 0){
+        printf("Failed to send GET Request to external website\n");
+        close(website_sockfd);
+        end_thread(client_num);
+    }  
+    memset(buf, 0, MESSAGE_LEN);
+    //receive back from website and send to browser
+    while((received[client_num] = read(website_sockfd, buf, MESSAGE_LEN)) > 0){
+        printf("Received back %d bytes\n",received[client_num]);
+        if (received[client_num] < 0) {
             pthread_cond_broadcast(buf_cond + client_num);
             pthread_mutex_unlock(buf_lock + client_num);
             printf("Lost Connection from client %d\n",client_num);
-            break;
+            close(website_sockfd);
+            end_thread(client_num);
         }
-        //close website
-        printf("Closing website connection\n");
-        if (close(website_sockfd) < 0){
-            printf("Failed to close website socket\n");
+        printf("saving to file\n");   
+        //save contents received to file 
+        website_file = fopen(pathbuf, "ab");
+        fwrite(buf, 1, MESSAGE_LEN, website_file);
+        fclose(website_file);
+        //send to browser
+        printf("Sending back to local browser\n");
+        if ((send(clients[client_num], buf, received[client_num], MSG_NOSIGNAL)) < 0){
+            //printf("Failed to send GET response to client\n");
+            close(website_sockfd);
+            end_thread(client_num);
         }
-
-        close(clients[client_num]);
-        pthread_cond_broadcast(buf_cond + client_num);
-        pthread_mutex_unlock(buf_lock + client_num);
-
-    } // continue to receive client data and convert to uppercase
-    
-    pthread_mutex_lock(&client_lock);
-    
+        memset(buf, 0, MESSAGE_LEN);
+    }
+    printf("closing thread\n");
+    close(website_sockfd);
+    close(clients[client_num]);
     freeclients[client_num] = 0;
-    pthread_mutex_unlock(&client_lock);
-    // Free client slot.
-
     pthread_cancel(rthreads[client_num]);
 }
-
 
 
 void *get_in_addr(struct sockaddr *sa)
@@ -310,6 +278,7 @@ int main(int argc, char *argv[]) {
     } // initialize mutex and condition arrays for buffer modification between send and receive threads.
 
     memset(&server_address, 0, sizeof(server_address));
+    
     server_address.ai_family = AF_INET6;
     server_address.ai_socktype = SOCK_STREAM;
     server_address.ai_flags = AI_PASSIVE;
@@ -357,6 +326,7 @@ int main(int argc, char *argv[]) {
         
         pthread_mutex_lock(&client_lock);
         while (freeclients[clientcount]) {
+            printf("%d\n",clientcount);
             clientcount = (clientcount + 1) % MAX_CLIENTS;
             if (startnum == clientcount) { 
                 printf("Max Clients Reached!\n");
@@ -385,10 +355,8 @@ int main(int argc, char *argv[]) {
                 perror("ERROR creating thread");
                 exit(1);
         } // Error if receive thread fails to instanciate
-
-
     } // Listen for new connections and establish threads to handle communication.
-        
+    printf("GOODBYE\n");
     close(server_socket);
 
     for (int i = 0; i < MAX_CLIENTS; i++) {

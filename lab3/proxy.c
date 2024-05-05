@@ -48,7 +48,6 @@ pthread_t sthreads[MAX_CLIENTS];
 
 char address[MESSAGE_LEN];
 
-
 void signal_handler(int sig){
 	printf( "\nCtrl-C pressed, closing socket and exiting...\n" );
 	g_keepgoing = 0;
@@ -56,32 +55,29 @@ void signal_handler(int sig){
         if (freeclients[i]){
             close(clients[i]);
             freeclients[i] = 0;
+            pthread_cancel(rthreads[i]);
+            pthread_cancel(sthreads[i]);
         }
-        pthread_cancel(rthreads[i]);
-        pthread_cancel(sthreads[i]);
     } // Close all client sockets and kill threads
 
     close(server_socket);
 }
 
-void end_thread(int client_num){
+void end_thread(int client_num){ //Close the current thread
     close(clients[client_num]);
     freeclients[client_num] = 0;
-    pthread_cond_broadcast(buf_cond + client_num);
-    pthread_mutex_unlock(buf_lock + client_num);
     pthread_cancel(rthreads[client_num]);
 }
 
 void * server_receive_thread(void * clinum){
     int client_num = (int) clinum;
     char* buf = (*client_bufs)[client_num];
-    pthread_mutex_lock(buf_lock + client_num);
-    char request[MESSAGE_LEN];
+    char request[MESSAGE_LEN];  
     char lastfour[4];
 parser:
     memset(buf, 0, MESSAGE_LEN);
     memset(request, 0, MESSAGE_LEN);
-    while(strcmp(request+strlen(request)-4, "\r\n\r\n") != 0){
+    while(strcmp(request+strlen(request)-4, "\r\n\r\n") != 0){ //keep parsing input until it reaches /r/n/r/n
         received[client_num] = read(clients[client_num], buf, MESSAGE_LEN - 1);
         if (received[client_num] <= 0) {
             pthread_mutex_unlock(buf_lock + client_num);
@@ -96,10 +92,11 @@ parser:
     strcpy(buf, request);
     memset(request, 0, MESSAGE_LEN);
     //printf("%s\n",buf);
+    //parse request
     struct ParsedRequest *req = ParsedRequest_create();
     if (ParsedRequest_parse(req, buf, strlen(buf)) < 0) {
-        printf("parse failed\n");
-        goto parser;
+        printf("parse failed please try again\n");
+        goto parser; //recolect input if parsing errored
     }
     printf("Recieved from client %d:\n", client_num);
     printf("Method:%s\n", req->method);
@@ -161,8 +158,9 @@ parser:
         end_thread(client_num);
     }  
     memset(buf, 0, MESSAGE_LEN);
+    //receive back from website and send to browser
     while((received[client_num] = read(website_sockfd, buf, MESSAGE_LEN)) > 0){
-        printf("Received back\n");
+        printf("Received back %d bytes\n",received[client_num]);
         if (received[client_num] < 0) {
             pthread_cond_broadcast(buf_cond + client_num);
             pthread_mutex_unlock(buf_lock + client_num);
@@ -171,8 +169,8 @@ parser:
             end_thread(client_num);
         }
         printf("Sending back to local browser\n");
-        if (send(clients[client_num], buf, received[client_num], 0) < 0){
-            printf("Failed to send GET response to client\n");
+        if ((send(clients[client_num], buf, received[client_num], MSG_NOSIGNAL)) < 0){
+            //printf("Failed to send GET response to client\n");
             close(website_sockfd);
             end_thread(client_num);
         }
@@ -182,8 +180,6 @@ parser:
     close(website_sockfd);
     close(clients[client_num]);
     freeclients[client_num] = 0;
-    pthread_cond_broadcast(buf_cond + client_num);
-    pthread_mutex_unlock(buf_lock + client_num);
     pthread_cancel(rthreads[client_num]);
 }
 
@@ -226,6 +222,7 @@ int main(int argc, char *argv[]) {
     } // initialize mutex and condition arrays for buffer modification between send and receive threads.
 
     memset(&server_address, 0, sizeof(server_address));
+    
     server_address.ai_family = AF_INET6;
     server_address.ai_socktype = SOCK_STREAM;
     server_address.ai_flags = AI_PASSIVE;

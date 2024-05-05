@@ -1,0 +1,6 @@
+Lab 3 by Bryce Bejlovec and Owen Sapp
+Completed in C
+
+
+The proxy.c and proxy program are the basic functionality expected for the Lab
+The proxy_cache.c and program are currently an attempt at caching, though they are currently non-functional as of 5/5
